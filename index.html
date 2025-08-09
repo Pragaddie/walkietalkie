@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Web Walkie-Talkie</title>
+  <style>
+    :root { font-family: system-ui, Arial, sans-serif; }
+    body { margin: 0; background:#0f1115; color:#e8e8ea; display:flex; min-height:100vh; }
+    .card { margin:auto; width: min(560px, 92vw); background:#171922; border:1px solid #262938; border-radius:16px; padding:22px; box-shadow: 0 12px 40px rgba(0,0,0,.35);}
+    h1 { margin:0 0 8px; font-size:1.4rem; }
+    p.sub { margin:0 0 18px; color:#9aa0ac; }
+    .row { display:flex; gap:10px; margin: 10px 0 16px; }
+    input, button { border-radius:10px; border:1px solid #2a2f3f; background:#0f1115; color:#e8e8ea; padding:12px 14px; font-size:14px; }
+    input { flex:1; outline:none; }
+    button { cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .status { margin:10px 0 0; font-size:14px; color:#9bd; }
+    .ptt { width:100%; padding:18px; font-size:16px; border:2px dashed #39405a; background:#131723; }
+    .ptt.talking { background:#173019; border-color:#2c6e34; }
+    .bad { color:#ff9b9b; }
+    .hint { color:#9aa0ac; font-size:12px; margin-top:8px; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid #2a2f3f; margin-right:6px; font-size:12px; color:#cbd3ff;}
+    footer { margin-top:14px; color:#788; font-size:12px; }
+  </style>
+
+  <!-- Firebase SDKs -->
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-app-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore-compat.js"></script>
+
+  <!-- Your Firebase config (edit this file) -->
+  <script defer src="./firebase-config.js"></script>
+  <!-- App logic -->
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <div class="card">
+    <h1>Web Walkie‑Talkie</h1>
+    <p class="sub">Push‑to‑talk voice chat for two people. Share a room code and press‑and‑hold to speak.</p>
+
+    <div class="row">
+      <input id="roomId" placeholder="Room code (e.g., 7352)" maxlength="32" />
+      <button id="createBtn" title="Create a new room">Create</button>
+      <button id="joinBtn" title="Join an existing room">Join</button>
+    </div>
+
+    <div class="row">
+      <input id="displayName" placeholder="Your name (optional)" />
+      <span class="pill" id="securePill">HTTPS</span>
+      <span class="pill" id="micPill">Mic: ?</span>
+    </div>
+
+    <button id="pttBtn" class="ptt" disabled>
+      Hold to Talk (Spacebar)
+    </button>
+    <div class="hint">Only one side talks at a time. Release to listen.</div>
+
+    <div class="status" id="status">Status: Not connected.</div>
+    <div class="status" id="who"></div>
+    <div class="status bad" id="errors"></div>
+
+    <!-- Hidden audio element to play remote audio -->
+    <audio id="remoteAudio" autoplay playsinline></audio>
+
+    <footer>Tip: Open this page on two devices. One taps “Create”, the other taps “Join” with the same room code.</footer>
+  </div>
+</body>
+</html>

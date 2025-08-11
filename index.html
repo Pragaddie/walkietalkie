@@ -29,6 +29,13 @@ html,body{
   display:flex; align-items:center; justify-content:center;
   padding:24px;
 }
+/* Prevent long-press selection/callout app-wide except in inputs/textarea */
+.device, .device *:not(input):not(textarea){
+  user-select:none;
+  -webkit-user-select:none;
+  -webkit-touch-callout:none;
+}
+
 /* DEVICE SHELL */
 .device{
   position:relative;
@@ -137,6 +144,7 @@ html,body{
   font-size:16px; color:#fff;
   cursor:pointer;
   transition:transform .08s ease, box-shadow .08s ease, background .15s ease;
+  user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
 }
 #pttBtn:active{
   transform: translateY(2px);
@@ -223,7 +231,7 @@ html,body{
 
     <!-- Bottom: Big 3D Push-To-Talk -->
     <div class="keys">
-      <button id="pttBtn" disabled>TALK</button>
+      <button id="pttBtn" disabled oncontextmenu="return false;">TALK</button>
       <div class="ptt-label">Hold to talk (Spacebar)</div>
     </div>
 

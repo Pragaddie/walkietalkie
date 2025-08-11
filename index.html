@@ -6,16 +6,16 @@
 <title>Walkie-Talkie</title>
 <style>
 :root{
-  --shell:#14161c;
-  --shell-hi:#1b1f28;
-  --glass:#0f1220;
+  --shell:#d6a500;     /* base yellow shell */
+  --shell-hi:#f1c40f;  /* highlight yellow */
+  --glass:#0f1220;     /* screen glass stays dark */
   --screen:#0b0e19;
   --text:#e9ecf3;
   --muted:#9aa4b6;
   --accent:#4cc2ff;
   --ok:#49c56b;
   --err:#ff8b8b;
-  --ptt:#e24646;
+  --ptt:#e24646;       /* red TALK button */
   --ptt-d:#b02f2f;
 }
 html,body{
@@ -37,10 +37,10 @@ html,body{
   background:linear-gradient(160deg,var(--shell-hi),var(--shell));
   border-radius:28px;
   box-shadow:
-    inset 0 2px 0 rgba(255,255,255,0.03),
-    inset 0 -10px 22px rgba(0,0,0,0.55),
-    0 20px 80px rgba(0,0,0,0.7);
-  border:1px solid #1f2330;
+    inset 0 2px 0 rgba(255,255,255,0.10),
+    inset 0 -10px 22px rgba(0,0,0,0.20),
+    0 20px 80px rgba(0,0,0,0.55);
+  border:1px solid #997a00; /* darker yellow/brown edge */
   display:grid;
   grid-template-rows: 74px 1fr 130px;
   overflow:hidden;
@@ -73,13 +73,13 @@ html,body{
 .engrave span{
   font-weight:800; letter-spacing:2px; font-size:12px;
   color:transparent;
-  background:linear-gradient(180deg, rgba(255,255,255,.18), rgba(0,0,0,.78));
+  background:linear-gradient(180deg, rgba(255,255,255,.22), rgba(0,0,0,.85));
   -webkit-background-clip:text; background-clip:text;
   text-shadow:
-    0 1px 0 rgba(255,255,255,0.10),
-    0 -1px 0 rgba(0,0,0,0.6);
-  filter: drop-shadow(0 1px 0 rgba(255,255,255,0.05));
-  opacity:.75;
+    0 1px 0 rgba(255,255,255,0.14),
+    0 -1px 0 rgba(0,0,0,0.7);
+  filter: drop-shadow(0 1px 0 rgba(255,255,255,0.06));
+  opacity:.8;
 }
 /* Screen */
 .screen-wrap{padding:10px 18px}
@@ -116,7 +116,7 @@ html,body{
 .softkeys{display:flex; gap:8px}
 #status{color:#9bd; font-size:12px}
 #who{color:#cbd9ff; font-size:12px}
-#errors{color:var(--err); font-size:12px}
+#errors{color:#ff8b8b; font-size:12px}
 /* Bottom control area with big 3D PTT */
 .keys{
   position:relative; padding:14px 18px 18px;
@@ -154,10 +154,12 @@ html,body{
     0 10px 22px rgba(73,197,107,.25);
 }
 #pttBtn:disabled{opacity:.65; cursor:not-allowed}
-.ptt-label{margin-top:8px; text-align:center; font-size:11px; color:#b7bdcb; opacity:.8}
+.ptt-label{margin-top:8px; text-align:center; font-size:11px; color:#2a2a2a; opacity:.85}
+
 /* Screws */
-.screw{position:absolute; width:10px; height:10px; border-radius:50%; background:#0e1118; border:1px solid #242a3a; box-shadow:inset 0 2px 4px rgba(0,0,0,.5)}
+.screw{position:absolute; width:10px; height:10px; border-radius:50%; background:#0e1118; border:1px solid #2f2f2f; box-shadow:inset 0 2px 4px rgba(0,0,0,.5)}
 .s1{top:10px; left:10px} .s2{top:10px; right:10px} .s3{bottom:10px; left:10px} .s4{bottom:10px; right:10px}
+
 /* Subtle scrollbar */
 .lcd::-webkit-scrollbar{height:8px;width:8px}
 .lcd::-webkit-scrollbar-thumb{background:#2a3146;border-radius:8px}

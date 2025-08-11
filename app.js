@@ -34,7 +34,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Push-to-talk
   const ptt = byId('pttBtn');
 
-  // Prevent long-press text selection / context menus for PTT
+  // --- LOCK the label so it always says TALK ---
+  ptt.textContent = "TALK";
+  const lockLabel = () => { if (ptt.textContent !== "TALK") ptt.textContent = "TALK"; };
+  new MutationObserver(lockLabel).observe(ptt, { childList: true, characterData: true, subtree: true });
+
+  // Prevent long-press selection / context menus for PTT
   ptt.addEventListener('mousedown', (e) => { e.preventDefault(); beginTalk(); }, {passive:false});
   ptt.addEventListener('touchstart', (e) => { e.preventDefault(); beginTalk(); }, {passive:false});
 
@@ -64,18 +69,20 @@ async function start(create) {
 
     pc = new RTCPeerConnection(rtcConfig);
 
+    // Add *disabled* mic initially (enable only while talking)
     micTrack.enabled = false;
     pc.addTrack(micTrack, localStream);
 
+    // Play remote audio
     const remoteAudio = byId('remoteAudio');
     pc.addEventListener('track', (ev) => {
       remoteAudio.srcObject = ev.streams[0];
     });
 
-    const candidatesCollectionName = create ? 'callerCandidates' : 'calleeCandidates';
     let candidatesCollection;
 
     if (create) {
+      // Caller creates a room
       roomId = (byId('roomId').value || '').trim() || String(Math.floor(1000 + Math.random()*9000));
       roomRef = db.collection('rooms').doc(roomId);
       await roomRef.set({ created: firebase.firestore.FieldValue.serverTimestamp(), who: (byId('displayName').value||"Caller") });
@@ -112,6 +119,7 @@ async function start(create) {
       byId('status').textContent = `Room created: ${roomId}. Waiting for partner…`;
       byId('roomId').value = roomId;
     } else {
+      // Joiner joins an existing room
       roomId = (byId('roomId').value || '').trim();
       if (!roomId) { err("Enter the room code to join."); return; }
 
@@ -155,8 +163,7 @@ function beginTalk() {
   if (talking) return;
   talking = true;
   micTrack.enabled = true;                 // unmute while held
-  byId('pttBtn').classList.add('talking'); // green color
-  showLed(true);
+  byId('pttBtn').classList.add('talking'); // color only; label stays "TALK"
 }
 
 function endTalk() {
@@ -165,28 +172,6 @@ function endTalk() {
   talking = false;
   micTrack.enabled = false;                // mute when released
   byId('pttBtn').classList.remove('talking');
-  showLed(false);
-}
-
-function showLed(on) {
-  let led = document.getElementById("txLed");
-  if (!led) {
-    led = document.createElement("div");
-    led.id = "txLed";
-    led.style.width = "10px";
-    led.style.height = "10px";
-    led.style.borderRadius = "50%";
-    led.style.background = "#2c2c2c";
-    led.style.position = "absolute";
-    led.style.top = "-16px";
-    led.style.left = "50%";
-    led.style.transform = "translateX(-50%)";
-    led.style.boxShadow = "0 0 4px rgba(0,0,0,0.4)";
-    byId('pttBtn').parentElement.style.position = "relative";
-    byId('pttBtn').parentElement.appendChild(led);
-  }
-  led.style.background = on ? "#ff3b3b" : "#2c2c2c";
-  led.style.boxShadow = on ? "0 0 6px #ff3b3b" : "0 0 4px rgba(0,0,0,0.4)";
 }
 
 function err(msg) {

@@ -1,4 +1,4 @@
-// Basic 1:1 WebRTC with Firestore signaling + push-to-talk (PTT)
+// Basic 1:1 WebRTC with Firestore signaling + push-to-talk (PTT) + presence list
 
 let app, db;
 let pc;
@@ -8,6 +8,15 @@ let roomRef;
 let roomId;
 let isCaller = false;
 let talking = false;
+let heartbeatTimer = null;
+
+// persistent client ID for "You"
+const CLIENT_ID_KEY = "wt_client_id_v1";
+const clientId = localStorage.getItem(CLIENT_ID_KEY) || (() => {
+  const id = "c_" + Math.random().toString(36).slice(2,10) + Date.now().toString(36);
+  localStorage.setItem(CLIENT_ID_KEY, id);
+  return id;
+})();
 
 const rtcConfig = {
   iceServers: [
@@ -33,7 +42,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Push-to-talk
   const ptt = byId('pttBtn');
-  let pttEngaged = false; // true only while press started on the TALK button
+  let pttEngaged = false;
 
   // Keep label always "TALK"
   ptt.textContent = "TALK";
@@ -52,13 +61,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   ptt.addEventListener('touchcancel', handleEnd, {passive:false});
   ptt.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // Spacebar PTT (ignore when typing into inputs/textarea)
+  // Spacebar PTT (ignore when typing)
   window.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === 'input' || tag === 'textarea') return;
     if (e.code === 'Space' && !pttEngaged) { e.preventDefault(); pttEngaged = true; beginTalk(); }
   }, {passive:false});
-
   window.addEventListener('keyup', (e) => {
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === 'input' || tag === 'textarea') return;
@@ -83,21 +91,22 @@ async function start(create) {
     const remoteAudio = byId('remoteAudio');
     pc.addEventListener('track', (ev) => { remoteAudio.srcObject = ev.streams[0]; });
 
-    let candidatesCollection;
-
     if (create) {
       // Caller creates a room
       roomId = (byId('roomId').value || '').trim() || String(Math.floor(1000 + Math.random()*9000));
       roomRef = db.collection('rooms').doc(roomId);
-      await roomRef.set({ created: firebase.firestore.FieldValue.serverTimestamp(), who: (byId('displayName').value||"Caller") });
+      await roomRef.set({ created: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
-      candidatesCollection = roomRef.collection('callerCandidates');
-      pc.addEventListener('icecandidate', (event) => { if (event.candidate) candidatesCollection.add(event.candidate.toJSON()); });
+      // Local ICE → Firestore
+      const callerCands = roomRef.collection('callerCandidates');
+      pc.addEventListener('icecandidate', (event) => { if (event.candidate) callerCands.add(event.candidate.toJSON()); });
 
+      // Create offer
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
       await pc.setLocalDescription(offer);
-      await roomRef.update({ offer: { type: offer.type, sdp: offer.sdp } });
+      await roomRef.set({ offer: { type: offer.type, sdp: offer.sdp } }, { merge: true });
 
+      // Wait for answer
       roomRef.onSnapshot(async (snap) => {
         const data = snap.data();
         if (!pc.currentRemoteDescription && data?.answer) {
@@ -105,9 +114,9 @@ async function start(create) {
           byId('status').textContent = `Connected. Room ${roomId}`;
           byId('pttBtn').disabled = false;
         }
-        byId('who').textContent = data?.joiner ? `Partner: ${data.joiner}` : '';
       });
 
+      // Remote ICE from callee
       roomRef.collection('calleeCandidates').onSnapshot((snapshot) => {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
@@ -126,30 +135,79 @@ async function start(create) {
       const roomSnap = await roomRef.get();
       if (!roomSnap.exists) { err("Room not found. Ask your friend to Create first."); return; }
 
-      candidatesCollection = roomRef.collection('calleeCandidates');
-      pc.addEventListener('icecandidate', (event) => { if (event.candidate) candidatesCollection.add(event.candidate.toJSON()); });
+      // Local ICE → Firestore
+      const calleeCands = roomRef.collection('calleeCandidates');
+      pc.addEventListener('icecandidate', (event) => { if (event.candidate) calleeCands.add(event.candidate.toJSON()); });
 
+      // Apply remote offer
       const roomData = roomSnap.data();
       if (!roomData?.offer) { err("Room has no offer yet. Wait a moment and try again."); return; }
       await pc.setRemoteDescription(new RTCSessionDescription(roomData.offer));
 
+      // Create answer
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      await roomRef.update({ answer: { type: answer.type, sdp: answer.sdp }, joiner: (byId('displayName').value||"Joiner") });
+      await roomRef.set({ answer: { type: answer.type, sdp: answer.sdp } }, { merge: true });
 
+      byId('status').textContent = `Connected. Room ${roomId}`;
+      byId('pttBtn').disabled = false;
+
+      // Remote ICE from caller
       roomRef.collection('callerCandidates').onSnapshot((snapshot) => {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
         });
       });
 
-      byId('status').textContent = `Connected. Room ${roomId}`;
-      byId('pttBtn').disabled = false;
       isCaller = false;
     }
+
+    // Register presence AFTER roomRef is known (both create/join)
+    await registerPresence();
+
   } catch (e) {
     err(e.message || String(e));
   }
+}
+
+async function registerPresence() {
+  const nameRaw = (byId('displayName').value || "").trim();
+  const displayName = nameRaw || "Guest";
+  const pRef = roomRef.collection('participants').doc(clientId);
+
+  // Add/mark online
+  await pRef.set({
+    name: displayName,
+    online: true,
+    active: firebase.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
+
+  // Heartbeat
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(() => {
+    pRef.set({ active: firebase.firestore.FieldValue.serverTimestamp(), online: true }, { merge: true });
+  }, 25000); // every 25s
+
+  // On unload, set offline (or delete)
+  const clean = async () => {
+    try { await pRef.set({ online: false, active: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+  };
+  window.addEventListener('beforeunload', clean);
+  window.addEventListener('pagehide', clean);
+
+  // Subscribe to list and render
+  roomRef.collection('participants').orderBy('active', 'desc').onSnapshot((snap) => {
+    const items = [];
+    snap.forEach(doc => {
+      const d = doc.data() || {};
+      const isSelf = (doc.id === clientId);
+      const label = isSelf ? "You" : (d.name || "Guest");
+      // Optionally gray out offline
+      const offline = d.online === false;
+      items.push(offline ? `${label} (offline)` : label);
+    });
+    byId('party').textContent = items.length ? `In room: ${items.join(', ')}` : 'In room: —';
+  });
 }
 
 function beginTalk() {

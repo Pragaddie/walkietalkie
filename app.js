@@ -33,31 +33,37 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Push-to-talk
   const ptt = byId('pttBtn');
+  let pttEngaged = false; // true only while press started on the TALK button
 
-  // --- LOCK the label so it always says TALK ---
+  // Keep label always "TALK"
   ptt.textContent = "TALK";
   const lockLabel = () => { if (ptt.textContent !== "TALK") ptt.textContent = "TALK"; };
   new MutationObserver(lockLabel).observe(ptt, { childList: true, characterData: true, subtree: true });
 
-  // Prevent long-press selection / context menus for PTT
-  ptt.addEventListener('mousedown', (e) => { e.preventDefault(); beginTalk(); }, {passive:false});
-  ptt.addEventListener('touchstart', (e) => { e.preventDefault(); beginTalk(); }, {passive:false});
+  // Start only if press begins on the button
+  const handleStart = (e) => { e.preventDefault(); pttEngaged = true; beginTalk(); };
+  const handleEnd   = (e) => { if (!pttEngaged) return; e.preventDefault(); pttEngaged = false; endTalk(); };
 
-  window.addEventListener('mouseup',   (e) => { e.preventDefault(); endTalk(); }, {passive:false});
-  window.addEventListener('touchend',  (e) => { e.preventDefault(); endTalk(); }, {passive:false});
+  ptt.addEventListener('mousedown', handleStart, {passive:false});
+  ptt.addEventListener('touchstart', handleStart, {passive:false});
+  ptt.addEventListener('mouseup', handleEnd, {passive:false});
+  ptt.addEventListener('mouseleave', handleEnd, {passive:false});
+  ptt.addEventListener('touchend', handleEnd, {passive:false});
+  ptt.addEventListener('touchcancel', handleEnd, {passive:false});
+  ptt.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // Spacebar PTT
+  // Spacebar PTT (ignore when typing into inputs/textarea)
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') { e.preventDefault(); beginTalk(); }
-  }, {passive:false});
-  window.addEventListener('keyup', (e) => {
-    if (e.code === 'Space') { e.preventDefault(); endTalk(); }
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    if (e.code === 'Space' && !pttEngaged) { e.preventDefault(); pttEngaged = true; beginTalk(); }
   }, {passive:false});
 
-  // Block context menu specifically on the PTT
-  window.addEventListener('contextmenu', (e) => {
-    if (e.target && e.target.id === 'pttBtn') e.preventDefault();
-  });
+  window.addEventListener('keyup', (e) => {
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    if (e.code === 'Space' && pttEngaged) { e.preventDefault(); pttEngaged = false; endTalk(); }
+  }, {passive:false});
 });
 
 async function start(create) {
@@ -75,9 +81,7 @@ async function start(create) {
 
     // Play remote audio
     const remoteAudio = byId('remoteAudio');
-    pc.addEventListener('track', (ev) => {
-      remoteAudio.srcObject = ev.streams[0];
-    });
+    pc.addEventListener('track', (ev) => { remoteAudio.srcObject = ev.streams[0]; });
 
     let candidatesCollection;
 
@@ -88,9 +92,7 @@ async function start(create) {
       await roomRef.set({ created: firebase.firestore.FieldValue.serverTimestamp(), who: (byId('displayName').value||"Caller") });
 
       candidatesCollection = roomRef.collection('callerCandidates');
-      pc.addEventListener('icecandidate', (event) => {
-        if (event.candidate) candidatesCollection.add(event.candidate.toJSON());
-      });
+      pc.addEventListener('icecandidate', (event) => { if (event.candidate) candidatesCollection.add(event.candidate.toJSON()); });
 
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
       await pc.setLocalDescription(offer);
@@ -108,10 +110,7 @@ async function start(create) {
 
       roomRef.collection('calleeCandidates').onSnapshot((snapshot) => {
         snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const cand = new RTCIceCandidate(change.doc.data());
-            pc.addIceCandidate(cand);
-          }
+          if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
         });
       });
 
@@ -128,9 +127,7 @@ async function start(create) {
       if (!roomSnap.exists) { err("Room not found. Ask your friend to Create first."); return; }
 
       candidatesCollection = roomRef.collection('calleeCandidates');
-      pc.addEventListener('icecandidate', (event) => {
-        if (event.candidate) candidatesCollection.add(event.candidate.toJSON());
-      });
+      pc.addEventListener('icecandidate', (event) => { if (event.candidate) candidatesCollection.add(event.candidate.toJSON()); });
 
       const roomData = roomSnap.data();
       if (!roomData?.offer) { err("Room has no offer yet. Wait a moment and try again."); return; }
@@ -142,10 +139,7 @@ async function start(create) {
 
       roomRef.collection('callerCandidates').onSnapshot((snapshot) => {
         snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const cand = new RTCIceCandidate(change.doc.data());
-            pc.addIceCandidate(cand);
-          }
+          if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
         });
       });
 

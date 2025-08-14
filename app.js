@@ -1,4 +1,4 @@
-// Device UI with internal pages: auth → home (online friends) → friends → groups → room
+// Device UI with internal pages: auth → home → friends → groups → room
 let app, db, rtdb, auth, functions;
 let currentUser = null, currentProfile = null;
 let unsubFriends = null, unsubFriendReq = null, unsubRooms = null, unsubRoomInvites = null, unsubMembers = null;
@@ -40,7 +40,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('createRoomBtn').onclick = onCreateRoom;
 
   // Room page
-  $('inviteBtn').onclick = onInviteFriend;
+  $('inviteBtn').onclick = onInviteFriend;   // now implemented
   $('leaveBtn').onclick = onLeaveRoom;
 
   // PTT
@@ -263,6 +263,20 @@ async function onCreateRoom(){
   }catch(e){ $('groupsMsg').textContent = e.message; }
 }
 
+async function onInviteFriend(){
+  if (!activeRoom) return;
+  const toUid = $('inviteSelect').value;
+  if (!toUid){ return; }
+  try{
+    await functions.httpsCallable('sendRoomInvite')({
+      roomId: activeRoom.roomId, toUid
+    });
+    // optional: show a tiny confirmation
+  }catch(e){
+    $('errors').textContent = e.message;
+  }
+}
+
 async function enterRoom(roomId){
   activeRoom = { roomId };
   setPage('room'); $('errors').textContent=''; $('status').textContent='Status: Loading…'; $('pttBtn').disabled = true;
@@ -319,7 +333,7 @@ async function allocateUserIdIfNeeded(){
   }
 }
 
-// ===== PTT / WebRTC (1:1 baseline)
+// ===== PTT / WebRTC
 function setupPTT(){
   const ptt = $('pttBtn'); let down = false;
   const begin = e=>{ e.preventDefault(); if(!down){down=true; beginTalk();} };
@@ -340,7 +354,6 @@ async function setupMedia(){
 async function startPttSignaling(roomId){
   const rtcConfig = { iceServers: [
     { urls: [ 'stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478' ] }
-    // TODO: add TURN for reliability
   ]};
   pc = new RTCPeerConnection(rtcConfig);
   micTrack.enabled = false;

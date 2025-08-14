@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Walkie-Talkie by Praggie — Device UI (pages inside)</title>
+<style>
+:root{
+  --shell:#d6a500; --shell-hi:#f1c40f; --screen:#0b0e19; --line:#2a3146;
+  --text:#e9ecf3; --muted:#9aa4b6; --accent:#4cc2ff; --ok:#49c56b; --err:#ff8b8b;
+  --ptt:#e24646; --ptt-d:#b02f2f;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 10%, #121212, #07090f);color:var(--text);font-family:system-ui,Segoe UI,Arial,sans-serif;}
+.stage{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px;}
+.device, .device *:not(input):not(textarea):not(button){user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;}
+.device{position:relative;width:min(380px,94vw);aspect-ratio:9/16;background:linear-gradient(160deg,var(--shell-hi),var(--shell));border-radius:28px;
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.10), inset 0 -10px 22px rgba(0,0,0,.20), 0 20px 80px rgba(0,0,0,.55);
+  border:1px solid #997a00; display:grid; grid-template-rows:74px 1fr 130px; overflow:hidden;}
+.antenna{position:absolute;top:-42px;left:26px;width:16px;height:42px;background:#3b3b3b;border-radius:6px 6px 0 0;border:1px solid #2a2a2a;
+  box-shadow:inset 0 2px 4px rgba(255,255,255,.08), inset 0 -6px 10px rgba(0,0,0,.4);}
+.head{position:relative;padding:14px 18px 4px 18px;}
+.grill{height:42px;border-radius:10px;background:linear-gradient(180deg,#1a1e2b,#10131e);border:1px solid #2a2f3f;box-shadow:inset 0 1px 0 rgba(255,255,255,.06), inset 0 -8px 16px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,.03);
+  display:grid;align-content:center;padding:0 14px;gap:6px;}
+.grill .row{display:flex;gap:8px}.grill .dot{height:4px;width:4px;background:#0b0e16;border-radius:50%;box-shadow:0 0 0 1px #121624;}
+.engrave{position:absolute;left:0;right:0;top:66px;display:flex;justify-content:center;z-index:4;pointer-events:none;}
+.engrave span{font-weight:800;letter-spacing:2px;font-size:12px;color:transparent;background:linear-gradient(180deg,rgba(255,255,255,.22),rgba(0,0,0,.85));
+  -webkit-background-clip:text;background-clip:text;text-shadow:0 1px 0 rgba(255,255,255,.08), 0 -1px 0 rgba(0,0,0,.5);filter:drop-shadow(0 1px 0 rgba(255,255,255,.06));opacity:.8;}
+.screen-wrap{padding:10px 18px}
+.screen{position:relative;height:100%;background:radial-gradient(140% 140% at 50% 0%, #0f1322, #0a0d19 60%, #080b16 100%);border:1px solid #2a3146;border-radius:16px;overflow:hidden;
+  box-shadow:inset 0 0 40px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.04);display:grid;grid-template-rows:32px 1fr 36px;}
+.statusbar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;font-size:12px;color:#cfe3ff;}
+.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);padding:2px 8px;border-radius:999px;font-size:11px;background:#0c1121}
+.tabs{display:flex;gap:6px;justify-content:center;border-top:1px solid var(--line);background:#0c1121}
+.tab{flex:1;display:flex;align-items:center;justify-content:center;padding:6px 8px;font-size:12px;border-right:1px solid var(--line);cursor:pointer}
+.tab:last-child{border-right:0}
+.tab.active{background:#121a34;color:#e9f2ff;text-shadow:0 0 12px rgba(100,150,255,.18)}
+.lcd{padding:12px;display:grid;gap:10px;align-content:start;overflow:auto; color:#dbe6ff;text-shadow:0 0 12px rgba(100,150,255,.12);font-size:14px;}
+.sectionTitle{font-weight:700;letter-spacing:.4px}
+.hint{color:var(--muted);font-size:12px}
+.field{display:flex;gap:8px}
+.input,.btn,.select{border-radius:10px;border:1px solid var(--line);background:#0c1121;color:var(--text);padding:10px 12px;font-size:13px;outline:none;}
+.input{flex:1;min-width:0}
+.btn{cursor:pointer}.btn:disabled{opacity:.6;cursor:not-allowed}
+.badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:11px;background:#0c1121;color:#cfe3ff}
+.list{display:grid;gap:8px}
+#errors{color:var(--err);font-size:12px}
+
+.keys{position:relative;padding:14px 18px 18px;display:grid;align-items:center;}
+#pttBtn{display:block;margin:auto;height:96px;width:96px;border-radius:50%;background:radial-gradient(circle at 30% 30%,var(--ptt),var(--ptt-d));
+  border:3px solid #6f1e1e;box-shadow:inset 0 4px 8px rgba(255,255,255,.18), inset 0 -8px 12px rgba(0,0,0,.45), 0 10px 22px rgba(0,0,0,.55);
+  font-weight:800;letter-spacing:.6px;font-size:16px;color:#fff;cursor:pointer;transition:transform .08s ease, box-shadow .08s ease, background .15s ease;
+  user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none;}
+#pttBtn:active{transform:translateY(2px);box-shadow:inset 0 2px 4px rgba(255,255,255,.18), inset 0 -4px 8px rgba(0,0,0,.55), 0 4px 10px rgba(0,0,0,.5);}
+#pttBtn.talking{background:radial-gradient(circle at 30% 30%,#4fcf7f,#2c8f58);box-shadow:inset 0 4px 8px rgba(255,255,255,.18), inset 0 -8px 12px rgba(0,0,0,.45), 0 10px 22px rgba(73,197,107,.25);}
+#pttBtn:disabled{opacity:.65;cursor:not-allowed}
+.ptt-label{margin-top:8px;text-align:center;font-size:11px;color:#2a2a2a;opacity:.85}
+.screw{position:absolute;width:10px;height:10px;border-radius:50%;background:#2b2b2b;border:1px solid #2f2f2f;box-shadow:inset 0 2px 4px rgba(0,0,0,.5)}
+.s1{top:10px;left:10px}.s2{top:10px;right:10px}.s3{bottom:10px;left:10px}.s4{bottom:10px;right:10px}
+.lcd::-webkit-scrollbar{height:8px;width:8px}.lcd::-webkit-scrollbar-thumb{background:#2a3146;border-radius:8px}
+</style>
+
+<!-- Firebase SDKs -->
+<script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-app-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-auth-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-database-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-functions-compat.js"></script>
+
+<script defer src="./firebase-config.js"></script>
+<script defer src="./app.js?v=device-tabs"></script>
+</head>
+<body>
+<div class="stage">
+  <div class="device">
+    <div class="antenna"></div>
+    <div class="head">
+      <div class="grill"><div class="row">
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      </div></div>
+      <div class="engrave"><span>WALKIE-TALKIE • BY PRAGGIE</span></div>
+    </div>
+
+    <div class="screen-wrap">
+      <div class="screen">
+        <!-- STATUS BAR -->
+        <div class="statusbar">
+          <span class="pill">Net: <span id="netPill">—</span></span>
+          <span class="pill">Mic: <span id="micPill">—</span></span>
+          <span class="pill">User: <span id="userPill">—</span></span>
+        </div>
+
+        <!-- LCD CONTENT (pages) -->
+        <div class="lcd" id="lcd">
+
+          <!-- AUTH PAGE -->
+          <div id="page-auth">
+            <div class="sectionTitle">Sign in</div>
+            <div class="field" style="margin-top:6px">
+              <input id="email" class="input" placeholder="Email" autocomplete="username">
+              <input id="password" class="input" type="password" placeholder="Password" autocomplete="current-password">
+            </div>
+            <div class="field">
+              <button id="loginBtn" class="btn">Log in</button>
+              <button id="signupBtn" class="btn">Sign up</button>
+            </div>
+            <div id="authMsg" class="hint"></div>
+          </div>
+
+          <!-- HOME: Friends online -->
+          <div id="page-home" style="display:none">
+            <div class="sectionTitle">Home</div>
+            <div class="badge">Friends online</div>
+            <div id="homeOnline" class="hint" style="margin-top:6px">—</div>
+          </div>
+
+          <!-- FRIENDS: Add + requests + all -->
+          <div id="page-friends" style="display:none">
+            <div class="sectionTitle">Friends</div>
+            <div class="badge">Add friend by ID</div>
+            <div class="field" style="margin-top:6px">
+              <input id="addFriendInput" class="input" placeholder="Friend ID (digits)" inputmode="numeric">
+              <button id="addFriendBtn" class="btn">Add</button>
+            </div>
+            <div id="addFriendMsg" class="hint"></div>
+            <div class="badge" style="margin-top:10px">Friend requests</div>
+            <div id="friendReqList" class="list hint">—</div>
+            <div class="badge" style="margin-top:10px">All friends</div>
+            <div id="friendsList" class="hint">—</div>
+          </div>
+
+          <!-- GROUPS: create + your groups + invites -->
+          <div id="page-groups" style="display:none">
+            <div class="sectionTitle">Groups</div>
+            <div class="badge">Create a group</div>
+            <div class="field" style="margin-top:6px">
+              <input id="roomNameInput" class="input" placeholder="Group name">
+              <button id="createRoomBtn" class="btn">Create</button>
+            </div>
+            <div id="groupsMsg" class="hint"></div>
+            <div class="badge" style="margin-top:10px">Your groups</div>
+            <div id="roomsList" class="list hint">—</div>
+            <div class="badge" style="margin-top:10px">Group invites</div>
+            <div id="invitesList" class="list hint">—</div>
+          </div>
+
+          <!-- ROOM VIEW -->
+          <div id="page-room" style="display:none">
+            <div class="sectionTitle" id="roomHeader">Room</div>
+            <div class="field">
+              <select id="inviteSelect" class="select"></select>
+              <button id="inviteBtn" class="btn">Invite</button>
+              <button id="leaveBtn" class="btn" style="margin-left:auto;background:#2a1b1b;border-color:#5a2b2b">Leave</button>
+            </div>
+            <div id="memberCounts" class="hint">—</div>
+            <div id="memberNames" class="hint">—</div>
+            <div id="errors"></div>
+            <div class="hint" id="status" style="margin-top:6px">Status: Idle</div>
+            <audio id="remoteAudio" autoplay playsinline style="display:none"></audio>
+          </div>
+
+        </div>
+
+        <!-- TABS -->
+        <div class="tabs">
+          <div class="tab active" data-page="home">Home</div>
+          <div class="tab" data-page="friends">Friends</div>
+          <div class="tab" data-page="groups">Groups</div>
+          <div class="tab" id="logoutBtn">Log out</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KEYS -->
+    <div class="keys">
+      <button id="pttBtn" disabled oncontextmenu="return false;">TALK</button>
+      <div class="ptt-label">Hold to talk (Spacebar)</div>
+    </div>
+
+    <div class="screw s1"></div><div class="screw s2"></div><div class="screw s3"></div><div class="screw s4"></div>
+  </div>
+</div>
+
+</body>
+</html>

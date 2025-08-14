@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function isUser(uid) { return isSignedIn() && request.auth.uid == uid; }
+
+    match /users/{uid} {
+      allow read: if isUser(uid);
+      allow write: if isUser(uid);
+    }
+
+    match /userIdLookup/{id} {
+      allow read: if false;  // server-only
+      allow write: if false;
+    }
+
+    match /idAllocator/{doc=**} {
+      allow read, write: if false;
+    }
+
+    match /roomCodeAllocator/{doc=**} {
+      allow read, write: if false;
+    }
+
+    match /friends/{pairId} {
+      allow read: if isSignedIn() && (request.auth.uid in resource.data.uids);
+      allow write: if false; // created by function
+    }
+
+    match /friendRequests/{requestId} {
+      allow read: if isSignedIn() && (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn() && (request.auth.uid == resource.data.toUid || request.auth.uid == resource.data.fromUid);
+    }
+
+    match /rooms/{roomId} {
+      allow read: if isSignedIn() && (request.auth.uid in resource.data.memberUids);
+      allow create, update, delete: if false; // server-only
+
+      match /members/{uid} {
+        allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.memberUids);
+        allow write: if isSignedIn() && request.auth.uid == uid; // users can set their own member doc
+      }
+
+      match /{sub=**} {
+        allow read, write: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.memberUids);
+      }
+    }
+
+    match /roomInvites/{inviteId} {
+      allow read: if isSignedIn() && (request.auth.uid == resource.data.toUid || request.auth.uid == resource.data.fromUid);
+      allow create, update: if isSignedIn(); // via functions
+      allow delete: if false;
+    }
+  }
+}

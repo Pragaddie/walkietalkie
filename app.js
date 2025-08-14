@@ -17,10 +17,11 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   app = firebase.initializeApp(firebaseConfig);
   db = firebase.firestore(); rtdb = firebase.database(); auth = firebase.auth(); functions = firebase.functions();
 
-  // pills
+  // status pills
   $('netPill').textContent = navigator.onLine ? 'Online' : 'Offline';
   window.addEventListener('online', ()=> $('netPill').textContent='Online');
   window.addEventListener('offline', ()=> $('netPill').textContent='Offline');
+  $('micPill').textContent = '—';
 
   // auth buttons
   $('loginBtn').onclick = login;
@@ -51,12 +52,15 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     if (!user){
       setAuthUI(true);
       teardownAll();
-      currentProfile = null; updateUserPill();
+      currentProfile = null;
+      updateUserPill();
+      updateMyIdBadge();
       return;
     }
     setAuthUI(false);
-    await ensureUserProfile();
+    await ensureUserProfile(); // allocates userID if missing
     updateUserPill();
+    updateMyIdBadge();
     wirePresence();
     // listeners
     listenFriends();
@@ -71,18 +75,22 @@ window.addEventListener('DOMContentLoaded', async ()=>{
 // ===== UI paging
 function setAuthUI(isAuthNeeded){
   show(pageEl('auth'), isAuthNeeded);
-  const after = !isAuthNeeded;
-  ['home','friends','groups','room'].forEach(p=>show(pageEl(p), false));
-  document.querySelectorAll('.tab[data-page]').forEach(t=> t.style.pointerEvents = after ? 'auto' : 'none');
+  const unlocked = !isAuthNeeded;
+  ['home','friends','groups','room'].forEach(p=> show(pageEl(p), false));
+  document.querySelectorAll('.tab[data-page]').forEach(t=> t.style.pointerEvents = unlocked ? 'auto' : 'none');
 }
 function setPage(name){
-  // tabs state
   document.querySelectorAll('.tab[data-page]').forEach(t=>t.classList.toggle('active', t.dataset.page===name));
-  // pages
   ['auth','home','friends','groups','room'].forEach(p=> show(pageEl(p), p===name));
 }
 function updateUserPill(){
-  $('userPill').textContent = currentUser ? (currentProfile?.userID ? `ID ${currentProfile.userID}` : currentUser.email) : '—';
+  $('userPill').textContent = currentUser
+    ? (currentProfile?.userID ? `ID ${currentProfile.userID}` : (currentUser.email || '—'))
+    : '—';
+}
+function updateMyIdBadge(){
+  const el = $('myIdBadge'); if (!el) return;
+  el.textContent = 'Your ID: ' + (currentProfile?.userID || '—');
 }
 
 // ===== Auth
@@ -95,7 +103,7 @@ async function login(){
 async function signup(){
   try{
     await auth.createUserWithEmailAndPassword($('email').value.trim(), $('password').value);
-    await allocateUserIdIfNeeded();
+    await allocateUserIdIfNeeded(); // first-time ID allocation
     $('authMsg').textContent = 'Signed up.';
   }catch(e){ $('authMsg').textContent = e.message; }
 }
@@ -104,8 +112,12 @@ async function ensureUserProfile(){
   const ref = db.collection('users').doc(uid);
   const snap = await ref.get();
   if (!snap.exists){
-    await ref.set({ displayName: auth.currentUser.email.split('@')[0], createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await ref.set({
+      displayName: auth.currentUser.email?.split('@')[0] || 'User',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
   }
+  // ensure numeric userID exists
   await allocateUserIdIfNeeded();
   currentProfile = (await ref.get()).data();
 }
@@ -269,7 +281,7 @@ async function enterRoom(roomId){
 
   const uid = auth.currentUser.uid;
   await memCol.doc(uid).set({
-    displayName: currentProfile?.displayName || auth.currentUser.email.split('@')[0],
+    displayName: currentProfile?.displayName || auth.currentUser.email?.split('@')[0] || 'User',
     userID: currentProfile?.userID || null,
     online: true,
     joinedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -296,10 +308,15 @@ async function onLeaveRoom(){
 
 // ===== Callables
 async function allocateUserIdIfNeeded(){
-  const uid = auth.currentUser.uid;
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
   const doc = await db.collection('users').doc(uid).get();
   if (doc.exists && doc.data().userID) return;
-  await functions.httpsCallable('allocateUserIdOnSignup')({});
+  try{
+    await functions.httpsCallable('allocateUserIdOnSignup')({});
+  }catch(e){
+    console.warn('ID allocation failed:', e);
+  }
 }
 
 // ===== PTT / WebRTC (1:1 baseline)
@@ -323,7 +340,7 @@ async function setupMedia(){
 async function startPttSignaling(roomId){
   const rtcConfig = { iceServers: [
     { urls: [ 'stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478' ] }
-    // TODO: TURN for reliability
+    // TODO: add TURN for reliability
   ]};
   pc = new RTCPeerConnection(rtcConfig);
   micTrack.enabled = false;

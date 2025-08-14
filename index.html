@@ -56,17 +56,45 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
 .cta-row{display:flex;gap:10px;justify-content:center;margin-top:6px}
 
 .u-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px;background:#29d172;box-shadow:0 0 8px rgba(41,209,114,.9)}
+
+/* TALK button + hardware screws */
+.keys{position:relative;padding:14px 18px 18px;display:grid;align-items:center;}
+#pttBtn{
+  display:block;margin:auto;height:96px;width:96px;border-radius:50%;
+  background:radial-gradient(circle at 30% 30%,var(--ptt),var(--ptt-d));
+  border:3px solid #6f1e1e;
+  box-shadow:inset 0 4px 8px rgba(255,255,255,.18),
+             inset 0 -8px 12px rgba(0,0,0,.45),
+             0 10px 22px rgba(0,0,0,.55);
+  font-weight:800;letter-spacing:.6px;font-size:16px;color:#fff;
+  cursor:pointer;transition:transform .08s ease, box-shadow .08s ease, background .15s ease;
+  user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none;
+}
+#pttBtn:active{transform:translateY(2px);
+  box-shadow:inset 0 2px 4px rgba(255,255,255,.18),
+             inset 0 -4px 8px rgba(0,0,0,.55),
+             0 4px 10px rgba(0,0,0,.5);}
+#pttBtn.talking{
+  background:radial-gradient(circle at 30% 30%,#4fcf7f,#2c8f58);
+  box-shadow:inset 0 4px 8px rgba(255,255,255,.18),
+             inset 0 -8px 12px rgba(0,0,0,.45),
+             0 10px 22px rgba(73,197,107,.25);
+}
+#pttBtn:disabled{opacity:.65;cursor:not-allowed}
+.ptt-label{margin-top:8px;text-align:center;font-size:11px;color:#2a2a2a;opacity:.85}
+.screw{position:absolute;width:10px;height:10px;border-radius:50%;background:#2b2b2b;border:1px solid #2f2f2f;box-shadow:inset 0 2px 4px rgba(0,0,0,.5)}
+.s1{top:10px;left:10px}.s2{top:10px;right:10px}.s3{bottom:10px;left:10px}.s4{bottom:10px;right:10px}
 </style>
 
 <!-- Firebase SDKs -->
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-app-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-auth-compat.js"></script>
-<script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore-compat.js"></script>
+script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-database-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-functions-compat.js"></script>
 
 <script defer src="./firebase-config.js"></script>
-<script defer src="./app.js?v=landing-login-signup-reset"></script>
+<script defer src="./app.js?v=fix-auth-and-ptt"></script>
 </head>
 <body>
 <div class="stage">
@@ -106,7 +134,7 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
           <!-- LOGIN -->
           <div id="page-auth-login" style="display:none">
             <div class="sectionTitle">Log in</div>
-            <div class="hint">Use your email and password. (Emails are only for login, never shown.)</div>
+            <div class="hint">Email and password. (Emails are only for login, never shown.)</div>
             <div class="field" style="margin-top:6px">
               <input id="loginEmail" class="input" placeholder="Email" autocomplete="username">
               <input id="loginPassword" class="input" type="password" placeholder="Password" autocomplete="current-password">
@@ -163,7 +191,6 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
           <!-- FRIENDS -->
           <div id="page-friends" style="display:none">
             <div class="sectionTitle">Friends</div>
-
             <div class="badge" id="myIdBadge" style="margin-top:4px">Your ID: —</div>
             <button id="getIdBtn" class="btn" style="margin-top:6px">Show / refresh my ID</button>
             <div id="getIdMsg" class="hint"></div>

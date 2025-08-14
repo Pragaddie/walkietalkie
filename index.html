@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Walkie-Talkie by Praggie — Device UI (pages inside)</title>
+<title>Walkie-Talkie • Device UI</title>
 <style>
 :root{
   --shell:#d6a500; --shell-hi:#f1c40f; --screen:#0b0e19; --line:#2a3146;
@@ -68,7 +68,7 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-functions-compat.js"></script>
 
 <script defer src="./firebase-config.js"></script>
-<script defer src="./app.js?v=device-tabs"></script>
+<script defer src="./app.js?v=device-tabs-id"></script>
 </head>
 <body>
 <div class="stage">
@@ -96,6 +96,7 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
           <!-- AUTH PAGE -->
           <div id="page-auth">
             <div class="sectionTitle">Sign in</div>
+            <div class="hint">Your numeric ID is auto-generated after signup.</div>
             <div class="field" style="margin-top:6px">
               <input id="email" class="input" placeholder="Email" autocomplete="username">
               <input id="password" class="input" type="password" placeholder="Password" autocomplete="current-password">
@@ -107,29 +108,34 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
             <div id="authMsg" class="hint"></div>
           </div>
 
-          <!-- HOME: Friends online -->
+          <!-- HOME -->
           <div id="page-home" style="display:none">
             <div class="sectionTitle">Home</div>
             <div class="badge">Friends online</div>
             <div id="homeOnline" class="hint" style="margin-top:6px">—</div>
           </div>
 
-          <!-- FRIENDS: Add + requests + all -->
+          <!-- FRIENDS -->
           <div id="page-friends" style="display:none">
             <div class="sectionTitle">Friends</div>
-            <div class="badge">Add friend by ID</div>
+
+            <div class="badge" id="myIdBadge" style="margin-top:4px">Your ID: —</div>
+
+            <div class="badge" style="margin-top:10px">Add friend by ID</div>
             <div class="field" style="margin-top:6px">
               <input id="addFriendInput" class="input" placeholder="Friend ID (digits)" inputmode="numeric">
               <button id="addFriendBtn" class="btn">Add</button>
             </div>
             <div id="addFriendMsg" class="hint"></div>
+
             <div class="badge" style="margin-top:10px">Friend requests</div>
             <div id="friendReqList" class="list hint">—</div>
+
             <div class="badge" style="margin-top:10px">All friends</div>
             <div id="friendsList" class="hint">—</div>
           </div>
 
-          <!-- GROUPS: create + your groups + invites -->
+          <!-- GROUPS -->
           <div id="page-groups" style="display:none">
             <div class="sectionTitle">Groups</div>
             <div class="badge">Create a group</div>
@@ -138,13 +144,15 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
               <button id="createRoomBtn" class="btn">Create</button>
             </div>
             <div id="groupsMsg" class="hint"></div>
+
             <div class="badge" style="margin-top:10px">Your groups</div>
             <div id="roomsList" class="list hint">—</div>
+
             <div class="badge" style="margin-top:10px">Group invites</div>
             <div id="invitesList" class="list hint">—</div>
           </div>
 
-          <!-- ROOM VIEW -->
+          <!-- ROOM -->
           <div id="page-room" style="display:none">
             <div class="sectionTitle" id="roomHeader">Room</div>
             <div class="field">

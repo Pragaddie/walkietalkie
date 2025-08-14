@@ -1,4 +1,4 @@
-// Device UI with internal pages: auth → home → friends → groups → room
+// Device UI with: auth → home (online friends) → friends → groups → room
 let app, db, rtdb, auth, functions;
 let currentUser = null, currentProfile = null;
 let unsubFriends = null, unsubFriendReq = null, unsubRooms = null, unsubRoomInvites = null, unsubMembers = null;
@@ -11,11 +11,13 @@ const $ = (id)=>document.getElementById(id);
 const on = (el,ev,cb,opts)=>el.addEventListener(ev,cb,opts||{});
 const show = (el,vis)=>{ el.style.display = vis ? 'block' : 'none'; };
 const pageEl = (name)=>document.getElementById('page-'+name);
+const escapeHtml = (s)=> (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]) );
 
 // boot
 window.addEventListener('DOMContentLoaded', async ()=>{
   app = firebase.initializeApp(firebaseConfig);
-  db = firebase.firestore(); rtdb = firebase.database(); auth = firebase.auth(); functions = firebase.functions();
+  db = firebase.firestore(); rtdb = firebase.database(); auth = firebase.auth();
+  functions = firebase.functions(); // set region here if you deployed outside default: firebase.app().functions('us-central1')
 
   // status pills
   $('netPill').textContent = navigator.onLine ? 'Online' : 'Offline';
@@ -33,67 +35,61 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   // global actions
   $('logoutBtn').onclick = async ()=>{ await auth.signOut(); };
 
-  // Friends page
+  // friends
   $('addFriendBtn').onclick = onAddFriend;
+  on($('getIdBtn'),'click', getMyId);
 
-  // Groups page
+  // groups
   $('createRoomBtn').onclick = onCreateRoom;
 
-  // Room page
-  $('inviteBtn').onclick = onInviteFriend;   // now implemented
+  // room
+  $('inviteBtn').onclick = onInviteFriend;
   $('leaveBtn').onclick = onLeaveRoom;
 
   // PTT
   setupPTT();
 
-  // auth state
+  // auth
   auth.onAuthStateChanged(async (user)=>{
     currentUser = user;
     if (!user){
       setAuthUI(true);
       teardownAll();
       currentProfile = null;
-      updateUserPill();
-      updateMyIdBadge();
+      updateUserPill(); updateMyIdBadge();
       return;
     }
     setAuthUI(false);
-    await ensureUserProfile(); // allocates userID if missing
-    updateUserPill();
-    updateMyIdBadge();
+    await ensureUserProfile();    // creates user doc if missing + allocates ID if needed
+    updateUserPill(); updateMyIdBadge();
     wirePresence();
-    // listeners
     listenFriends();
     listenFriendRequests();
     listenRooms();
     listenRoomInvites();
-    // land on Home page
     setPage('home');
   });
 });
 
-// ===== UI paging
+// ========== UI paging
 function setAuthUI(isAuthNeeded){
   show(pageEl('auth'), isAuthNeeded);
-  const unlocked = !isAuthNeeded;
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), false));
-  document.querySelectorAll('.tab[data-page]').forEach(t=> t.style.pointerEvents = unlocked ? 'auto' : 'none');
+  document.querySelectorAll('.tab[data-page]').forEach(t=> t.style.pointerEvents = isAuthNeeded ? 'none' : 'auto');
 }
 function setPage(name){
   document.querySelectorAll('.tab[data-page]').forEach(t=>t.classList.toggle('active', t.dataset.page===name));
   ['auth','home','friends','groups','room'].forEach(p=> show(pageEl(p), p===name));
 }
 function updateUserPill(){
-  $('userPill').textContent = currentUser
-    ? (currentProfile?.userID ? `ID ${currentProfile.userID}` : (currentUser.email || '—'))
-    : '—';
+  const id = currentProfile?.userID;
+  $('userPill').textContent = 'ID ' + (id || '—');
 }
 function updateMyIdBadge(){
-  const el = $('myIdBadge'); if (!el) return;
-  el.textContent = 'Your ID: ' + (currentProfile?.userID || '—');
+  $('myIdBadge').textContent = 'Your ID: ' + (currentProfile?.userID || '—');
 }
 
-// ===== Auth
+// ========== Auth
 async function login(){
   try{
     await auth.signInWithEmailAndPassword($('email').value.trim(), $('password').value);
@@ -102,8 +98,16 @@ async function login(){
 }
 async function signup(){
   try{
+    const name = $('nameInput').value.trim();
+    if (!name){ $('authMsg').textContent = 'Please enter your name for Sign up.'; return; }
     await auth.createUserWithEmailAndPassword($('email').value.trim(), $('password').value);
-    await allocateUserIdIfNeeded(); // first-time ID allocation
+    // immediately write profile with Name (no emails displayed anywhere in UI)
+    const uid = auth.currentUser.uid;
+    await db.collection('users').doc(uid).set({
+      displayName: name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge:true });
+    await allocateUserIdIfNeeded(); // get numeric ID
     $('authMsg').textContent = 'Signed up.';
   }catch(e){ $('authMsg').textContent = e.message; }
 }
@@ -112,17 +116,18 @@ async function ensureUserProfile(){
   const ref = db.collection('users').doc(uid);
   const snap = await ref.get();
   if (!snap.exists){
+    // create minimal doc (no email shown)
     await ref.set({
-      displayName: auth.currentUser.email?.split('@')[0] || 'User',
+      displayName: 'User',
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }
-  // ensure numeric userID exists
+  // ensure numeric ID exists
   await allocateUserIdIfNeeded();
   currentProfile = (await ref.get()).data();
 }
 
-// ===== Presence (RTDB presence → mirrored by CF)
+// ========== Presence (RTDB)
 function wirePresence(){
   const uid = auth.currentUser.uid;
   const statusRef = rtdb.ref('/status/'+uid);
@@ -134,7 +139,7 @@ function wirePresence(){
   });
 }
 
-// ===== Friends & Requests
+// ========== Friends & Requests
 function teardownAll(){
   [unsubFriends,unsubFriendReq,unsubRooms,unsubRoomInvites,unsubMembers].forEach(fn=>{ try{ fn && fn(); }catch{} });
   unsubFriends=unsubFriendReq=unsubRooms=unsubRoomInvites=unsubMembers=null;
@@ -167,15 +172,21 @@ function listenFriendRequests(){
   if (unsubFriendReq) unsubFriendReq();
   const uid = auth.currentUser.uid;
   const q = db.collection('friendRequests').where('toUid','==',uid).where('status','==','pending').orderBy('createdAt','desc');
-  unsubFriendReq = q.onSnapshot((qs)=>{
+  unsubFriendReq = q.onSnapshot(async (qs)=>{
     if (qs.empty){ $('friendReqList').textContent='—'; return; }
-    const rows=[];
-    qs.forEach(doc=>{
-      const d = doc.data();
-      rows.push(`<div>From <b>${d.fromUserID ? '#'+d.fromUserID : 'user'}</b>
+    const rows = await Promise.all(qs.docs.map(async doc=>{
+      const d = doc.data(); // expects fields: fromUid, fromUserID (string)
+      // Look up the sender's Name:
+      let fromName = '(user)';
+      try {
+        const sender = await db.collection('users').doc(d.fromUid).get();
+        fromName = sender.data()?.displayName || fromName;
+      } catch {}
+      const idText = d.fromUserID ? ` #${d.fromUserID}` : '';
+      return `<div>From <b>${escapeHtml(fromName)}</b><span class="hint">${idText}</span>
         <button class="btn" data-acc="${doc.id}">Accept</button>
-        <button class="btn" data-rej="${doc.id}">Reject</button></div>`);
-    });
+        <button class="btn" data-rej="${doc.id}">Reject</button></div>`;
+    }));
     $('friendReqList').innerHTML = rows.join('');
     $('friendReqList').querySelectorAll('[data-acc]').forEach(b=>on(b,'click',()=>respondFriendReq(b.dataset.acc,'accepted')));
     $('friendReqList').querySelectorAll('[data-rej]').forEach(b=>on(b,'click',()=>respondFriendReq(b.dataset.rej,'rejected')));
@@ -190,7 +201,7 @@ async function onAddFriend(){
   try{
     const send = functions.httpsCallable('sendFriendRequest');
     const res = await send({ userIdDigits: raw });
-    $('addFriendMsg').textContent = res.data.message || 'Request sent.';
+    $('addFriendMsg').textContent = res.data?.message || 'Request sent.';
     $('addFriendInput').value='';
   }catch(e){ $('addFriendMsg').textContent = e.message; }
 }
@@ -210,7 +221,7 @@ async function respondFriendReq(reqId, action){
   }catch(e){ console.error(e); }
 }
 
-// ===== Groups (rooms + invites)
+// ========== Groups (rooms + invites)
 function listenRooms(){
   if (unsubRooms) unsubRooms();
   const uid = auth.currentUser.uid;
@@ -236,7 +247,8 @@ function listenRoomInvites(){
     const rows=[];
     qs.forEach(doc=>{
       const d = doc.data();
-      rows.push(`<div>Invite to <b>${escapeHtml(d.roomName||'Room')}</b> from <b>${escapeHtml(d.fromName||'Friend')}</b>
+      const from = d.fromName || 'Friend';
+      rows.push(`<div>Invite to <b>${escapeHtml(d.roomName||'Room')}</b> from <b>${escapeHtml(from)}</b>
         <button class="btn" data-acc="${doc.id}">Join</button>
         <button class="btn" data-rej="${doc.id}">Reject</button></div>`);
     });
@@ -247,9 +259,8 @@ function listenRoomInvites(){
 }
 
 async function respondInvite(inviteId, action){
-  try{
-    await functions.httpsCallable('respondRoomInvite')({ inviteId, action });
-  }catch(e){ console.error(e); }
+  try{ await functions.httpsCallable('respondRoomInvite')({ inviteId, action }); }
+  catch(e){ console.error(e); }
 }
 
 async function onCreateRoom(){
@@ -268,10 +279,7 @@ async function onInviteFriend(){
   const toUid = $('inviteSelect').value;
   if (!toUid){ return; }
   try{
-    await functions.httpsCallable('sendRoomInvite')({
-      roomId: activeRoom.roomId, toUid
-    });
-    // optional: show a tiny confirmation
+    await functions.httpsCallable('sendRoomInvite')({ roomId: activeRoom.roomId, toUid });
   }catch(e){
     $('errors').textContent = e.message;
   }
@@ -295,7 +303,7 @@ async function enterRoom(roomId){
 
   const uid = auth.currentUser.uid;
   await memCol.doc(uid).set({
-    displayName: currentProfile?.displayName || auth.currentUser.email?.split('@')[0] || 'User',
+    displayName: currentProfile?.displayName || 'User',
     userID: currentProfile?.userID || null,
     online: true,
     joinedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -320,7 +328,7 @@ async function onLeaveRoom(){
   setPage('groups');
 }
 
-// ===== Callables
+// ========== Callables (IDs)
 async function allocateUserIdIfNeeded(){
   const uid = auth.currentUser?.uid;
   if (!uid) return;
@@ -328,12 +336,25 @@ async function allocateUserIdIfNeeded(){
   if (doc.exists && doc.data().userID) return;
   try{
     await functions.httpsCallable('allocateUserIdOnSignup')({});
+  }catch(e){ console.warn('ID allocation failed:', e); }
+}
+
+async function getMyId(){
+  if (!auth.currentUser){ $('getIdMsg').textContent = 'Please log in first.'; return; }
+  $('getIdMsg').textContent = 'Checking…';
+  try{
+    await allocateUserIdIfNeeded();
+    const uid = auth.currentUser.uid;
+    const snap = await db.collection('users').doc(uid).get();
+    currentProfile = snap.data();
+    updateUserPill(); updateMyIdBadge();
+    $('getIdMsg').textContent = currentProfile?.userID ? `Your ID is ${currentProfile.userID}` : 'Still no ID — check Functions deploy.';
   }catch(e){
-    console.warn('ID allocation failed:', e);
+    $('getIdMsg').textContent = `Couldn’t get ID: ${e.message}`;
   }
 }
 
-// ===== PTT / WebRTC
+// ========== PTT / WebRTC (1:1 baseline signaling)
 function setupPTT(){
   const ptt = $('pttBtn'); let down = false;
   const begin = e=>{ e.preventDefault(); if(!down){down=true; beginTalk();} };
@@ -416,6 +437,3 @@ function teardownWebRTC(){
   pc=null; localStream=null; micTrack=null; talking=false;
   $('pttBtn').disabled=true; $('status').textContent='Status: Idle'; $('pttBtn').classList.remove('talking');
 }
-
-// utils
-function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }

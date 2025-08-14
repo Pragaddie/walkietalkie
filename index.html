@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Walkie-Talkie • Device UI</title>
+<title>Walkie-Talkie • by Praggie</title>
+
 <style>
 :root{
   --shell:#d6a500; --shell-hi:#f1c40f; --line:#2a3146;
   --text:#e9ecf3; --muted:#9aa4b6; --accent:#4cc2ff; --ok:#49c56b; --err:#ff8b8b;
-  --ptt:#e24646; --ptt-d:#b02f2f;
+  --ptt:#e24646; --ptt-d:#b02f2f; --deep:#080b16;
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 10%, #121212, #07090f);color:var(--text);font-family:system-ui,Segoe UI,Arial,sans-serif;}
@@ -27,7 +28,7 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
 .engrave span{font-weight:800;letter-spacing:2px;font-size:12px;color:transparent;background:linear-gradient(180deg,rgba(255,255,255,.22),rgba(0,0,0,.85));
   -webkit-background-clip:text;background-clip:text;text-shadow:0 1px 0 rgba(255,255,255,.08), 0 -1px 0 rgba(0,0,0,.5);filter:drop-shadow(0 1px 0 rgba(255,255,255,.06));opacity:.8;}
 .screen-wrap{padding:10px 18px}
-.screen{position:relative;height:100%;background:radial-gradient(140% 140% at 50% 0%, #0f1322, #0a0d19 60%, #080b16 100%);border:1px solid var(--line);border-radius:16px;overflow:hidden;
+.screen{position:relative;height:100%;background:radial-gradient(140% 140% at 50% 0%, #0f1322, var(--deep) 60%, #060a13 100%);border:1px solid var(--line);border-radius:16px;overflow:hidden;
   box-shadow:inset 0 0 40px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.04);display:grid;grid-template-rows:32px 1fr 36px;}
 .statusbar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;font-size:12px;color:#cfe3ff;}
 .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);padding:2px 8px;border-radius:999px;font-size:11px;background:#0c1121}
@@ -46,18 +47,15 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
 .list{display:grid;gap:8px}
 .err{color:var(--err);font-size:12px}
 
-.keys{position:relative;padding:14px 18px 18px;display:grid;align-items:center;}
-#pttBtn{display:block;margin:auto;height:96px;width:96px;border-radius:50%;background:radial-gradient(circle at 30% 30%,var(--ptt),var(--ptt-d));
-  border:3px solid #6f1e1e;box-shadow:inset 0 4px 8px rgba(255,255,255,.18), inset 0 -8px 12px rgba(0,0,0,.45), 0 10px 22px rgba(0,0,0,.55);
-  font-weight:800;letter-spacing:.6px;font-size:16px;color:#fff;cursor:pointer;transition:transform .08s ease, box-shadow .08s ease, background .15s ease;
-  user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none;}
-#pttBtn:active{transform:translateY(2px);box-shadow:inset 0 2px 4px rgba(255,255,255,.18), inset 0 -4px 8px rgba(0,0,0,.55), 0 4px 10px rgba(0,0,0,.5);}
-#pttBtn.talking{background:radial-gradient(circle at 30% 30%,#4fcf7f,#2c8f58);box-shadow:inset 0 4px 8px rgba(255,255,255,.18), inset 0 -8px 12px rgba(0,0,0,.45), 0 10px 22px rgba(73,197,107,.25);}
-#pttBtn:disabled{opacity:.65;cursor:not-allowed}
-.ptt-label{margin-top:8px;text-align:center;font-size:11px;color:#2a2a2a;opacity:.85}
-.screw{position:absolute;width:10px;height:10px;border-radius:50%;background:#2b2b2b;border:1px solid #2f2f2f;box-shadow:inset 0 2px 4px rgba(0,0,0,.5)}
-.s1{top:10px;left:10px}.s2{top:10px;right:10px}.s3{bottom:10px;left:10px}.s4{bottom:10px;right:10px}
-.lcd::-webkit-scrollbar{height:8px;width:8px}.lcd::-webkit-scrollbar-thumb{background:#2a3146;border-radius:8px}
+.logo{display:grid;gap:8px;justify-items:center;margin-top:8px;margin-bottom:8px}
+.logo-title{font-weight:900;letter-spacing:1.2px;font-size:22px;background:linear-gradient(90deg,#fff,#ffd86b,#fff);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 1px 8px rgba(255,218,107,.25))}
+.logo-sub{font-size:12px;color:#b9c5ff;opacity:.9}
+
+.bigbtn{padding:12px 16px;border-radius:12px;border:1px solid var(--line);background:#0f1731;color:#e8f1ff;cursor:pointer;font-weight:700}
+.bigbtn:hover{background:#121e42}
+.cta-row{display:flex;gap:10px;justify-content:center;margin-top:6px}
+
+.u-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px;background:#29d172;box-shadow:0 0 8px rgba(41,209,114,.9)}
 </style>
 
 <!-- Firebase SDKs -->
@@ -68,7 +66,7 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-functions-compat.js"></script>
 
 <script defer src="./firebase-config.js"></script>
-<script defer src="./app.js?v=names-and-id"></script>
+<script defer src="./app.js?v=landing-login-signup-reset"></script>
 </head>
 <body>
 <div class="stage">
@@ -93,22 +91,66 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
         <!-- LCD CONTENT -->
         <div class="lcd" id="lcd">
 
-          <!-- AUTH -->
-          <div id="page-auth">
-            <div class="sectionTitle">Sign in</div>
-            <div class="hint">Use your email only for login. Your <b>Name</b> and <b>numeric ID</b> are what people will see.</div>
+          <!-- AUTH LANDING -->
+          <div id="page-auth-landing">
+            <div class="logo">
+              <div class="logo-title">WALKIE-TALKIE</div>
+              <div class="logo-sub">by Praggie</div>
+            </div>
+            <div class="cta-row">
+              <button id="toLoginBtn" class="bigbtn">Log in</button>
+              <button id="toSignupBtn" class="bigbtn">Sign up</button>
+            </div>
+          </div>
+
+          <!-- LOGIN -->
+          <div id="page-auth-login" style="display:none">
+            <div class="sectionTitle">Log in</div>
+            <div class="hint">Use your email and password. (Emails are only for login, never shown.)</div>
             <div class="field" style="margin-top:6px">
-              <input id="nameInput" class="input" placeholder="Your name (for Sign up)">
+              <input id="loginEmail" class="input" placeholder="Email" autocomplete="username">
+              <input id="loginPassword" class="input" type="password" placeholder="Password" autocomplete="current-password">
             </div>
             <div class="field">
-              <input id="email" class="input" placeholder="Email (login/account only)" autocomplete="username">
-              <input id="password" class="input" type="password" placeholder="Password" autocomplete="current-password">
+              <button id="loginSubmitBtn" class="btn">Log in</button>
+              <button id="toResetBtn" class="btn" style="margin-left:auto">Forgot password?</button>
             </div>
             <div class="field">
-              <button id="loginBtn" class="btn">Log in</button>
-              <button id="signupBtn" class="btn">Sign up</button>
+              <button id="backFromLoginBtn" class="btn">Back</button>
             </div>
-            <div id="authMsg" class="hint"></div>
+            <div id="loginMsg" class="hint"></div>
+          </div>
+
+          <!-- SIGNUP -->
+          <div id="page-auth-signup" style="display:none">
+            <div class="sectionTitle">Sign up</div>
+            <div class="hint">Pick a username people will see. We’ll also give you a numeric ID.</div>
+            <div class="field" style="margin-top:6px">
+              <input id="signupName" class="input" placeholder="Username (shown to others)">
+            </div>
+            <div class="field">
+              <input id="signupEmail" class="input" placeholder="Email" autocomplete="username">
+              <input id="signupPassword" class="input" type="password" placeholder="Password" autocomplete="new-password">
+            </div>
+            <div class="field">
+              <button id="signupSubmitBtn" class="btn">Create account</button>
+              <button id="backFromSignupBtn" class="btn">Back</button>
+            </div>
+            <div id="signupMsg" class="hint"></div>
+          </div>
+
+          <!-- RESET PASSWORD -->
+          <div id="page-auth-reset" style="display:none">
+            <div class="sectionTitle">Reset password</div>
+            <div class="hint">Enter your email and we’ll send a reset link.</div>
+            <div class="field" style="margin-top:6px">
+              <input id="resetEmail" class="input" placeholder="Email">
+              <button id="resetSubmitBtn" class="btn">Send reset email</button>
+            </div>
+            <div class="field">
+              <button id="backFromResetBtn" class="btn">Back</button>
+            </div>
+            <div id="resetMsg" class="hint"></div>
           </div>
 
           <!-- HOME -->

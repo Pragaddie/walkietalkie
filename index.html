@@ -86,15 +86,16 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
 .s1{top:10px;left:10px}.s2{top:10px;right:10px}.s3{bottom:10px;left:10px}.s4{bottom:10px;right:10px}
 </style>
 
-<!-- Firebase SDKs -->
+<!-- Firebase SDKs (order matters) -->
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-app-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-auth-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-database-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.3/firebase-functions-compat.js"></script>
 
-<script defer src="./firebase-config.js"></script>
-<script defer src="./app.js?v=fix-auth-and-ptt"></script>
+<!-- Your config BEFORE app.js -->
+<script defer src="./firebase-config.js?v=6"></script>
+<script defer src="./app.js?v=clean-fix-1"></script>
 </head>
 <body>
 <div class="stage">
@@ -119,22 +120,27 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
         <!-- LCD CONTENT -->
         <div class="lcd" id="lcd">
 
-          <!-- AUTH LANDING -->
+          <!-- AUTH LANDING (shown only when LOGGED OUT) -->
           <div id="page-auth-landing">
             <div class="logo">
               <div class="logo-title">WALKIE-TALKIE</div>
               <div class="logo-sub">by Praggie</div>
             </div>
-            <div class="cta-row">
+            <div id="authCtas" class="cta-row">
               <button id="toLoginBtn" class="bigbtn">Log in</button>
               <button id="toSignupBtn" class="bigbtn">Sign up</button>
+            </div>
+            <!-- optional greeting block; app will hide whole landing once logged in -->
+            <div id="authGreet" class="logo" style="display:none;margin-top:0">
+              <div class="logo-title">HEY, <span id="hiName">Friend</span>!</div>
+              <div class="logo-sub">good to have you back</div>
             </div>
           </div>
 
           <!-- LOGIN -->
           <div id="page-auth-login" style="display:none">
             <div class="sectionTitle">Log in</div>
-            <div class="hint">Email and password. (Emails are only for login, never shown.)</div>
+            <div class="hint">Email + password (email is only for login; never shown).</div>
             <div class="field" style="margin-top:6px">
               <input id="loginEmail" class="input" placeholder="Email" autocomplete="username">
               <input id="loginPassword" class="input" type="password" placeholder="Password" autocomplete="current-password">
@@ -152,7 +158,7 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
           <!-- SIGNUP -->
           <div id="page-auth-signup" style="display:none">
             <div class="sectionTitle">Sign up</div>
-            <div class="hint">Pick a username people will see. We’ll also give you a numeric ID.</div>
+            <div class="hint">Pick a username people will see. You’ll also get a numeric ID.</div>
             <div class="field" style="margin-top:6px">
               <input id="signupName" class="input" placeholder="Username (shown to others)">
             </div>
@@ -191,6 +197,7 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
           <!-- FRIENDS -->
           <div id="page-friends" style="display:none">
             <div class="sectionTitle">Friends</div>
+
             <div class="badge" id="myIdBadge" style="margin-top:4px">Your ID: —</div>
             <button id="getIdBtn" class="btn" style="margin-top:6px">Show / refresh my ID</button>
             <div id="getIdMsg" class="hint"></div>
@@ -265,4 +272,3 @@ html,body{height:100%;margin:0;background:radial-gradient(1200px circle at 10% 1
 
 </body>
 </html>
-

@@ -1,244 +1,182 @@
-// Firebase Cloud Functions: userID allocator (shortest length first), room creation with hidden numeric codes,
-// friend requests, invites, presence mirroring, and room auto-cleanup.
-
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 admin.initializeApp();
-
 const db = admin.firestore();
-const rtdb = admin.database();
+const FieldValue = admin.firestore.FieldValue;
 
-// ---------- Helpers
-function padLeft(numStr, len){
-  // We allow leading zeros for L>=2; for L=1 we avoid '0' unless needed (configurable)
-  if (numStr.length >= len) return numStr;
-  return '0'.repeat(len - numStr.length) + numStr;
-}
-async function txGetOrCreate(refPath, initial){
-  const ref = db.doc(refPath);
-  await db.runTransaction(async (t)=>{
-    const snap = await t.get(ref);
-    if (!snap.exists) t.set(ref, initial);
-  });
-  return db.doc(refPath).get();
-}
+/* -------- ID allocator (digits, no collisions) -------- */
+exports.allocateUserIdOnSignup = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated','Login required');
 
-// ---------- UserID allocator
-exports.allocateUserIdOnSignup = functions.https.onCall(async (data, context)=>{
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated','Sign in first.');
-  const uid = context.auth.uid;
   const userRef = db.collection('users').doc(uid);
-  const u = await userRef.get();
-  if (u.exists && u.data().userID){ return { userID: u.data().userID }; }
+  const user = await userRef.get();
+  if (user.exists && user.data().userID) return { userID: user.data().userID };
 
-  const stateRef = db.collection('idAllocator').doc('state');
-  await txGetOrCreate('idAllocator/state', { currentLength: 1, issuedCountForLength: 0 });
+  const metaRef = db.collection('idAllocator').doc('meta'); // {digits: number}
+  await db.runTransaction(async (tx) => {
+    const metaSnap = await tx.get(metaRef);
+    let digits = metaSnap.exists ? (metaSnap.data().digits || 1) : 1;
 
-  let assigned = null;
-  await db.runTransaction(async (t)=>{
-    const state = await t.get(stateRef);
-    let { currentLength, issuedCountForLength } = state.data();
-    const maxForLength = currentLength === 1 ? 9 /*1-9*/ : Math.pow(10, currentLength);
-
-    // If exhausted, advance length
-    if (issuedCountForLength >= maxForLength){
-      currentLength += 1;
-      issuedCountForLength = 0;
-    }
-
-    // Try random candidates within this length
-    const attempts = 20;
-    for (let i=0;i<attempts;i++){
-      let candidateNum;
-      if (currentLength === 1){
-        candidateNum = Math.floor(Math.random()*9)+1; // 1..9
-      }else{
-        candidateNum = Math.floor(Math.random()*Math.pow(10,currentLength));
-      }
-      const candidate = currentLength===1 ? String(candidateNum) : padLeft(String(candidateNum), currentLength);
-      const claimRef = db.collection('idAllocator').doc(`assigned_${candidate}`);
-      const claim = await t.get(claimRef);
-      if (!claim.exists){
-        // Reserve
-        t.set(claimRef, { uid, length: currentLength, createdAt: admin.firestore.FieldValue.serverTimestamp() });
-        // Map for reverse lookup (userID -> uid)
-        t.set(db.collection('userIdLookup').doc(candidate), { uid });
-        // Write to user
-        t.set(userRef, { userID: candidate }, { merge: true });
-        // Update state
-        t.set(stateRef, { currentLength, issuedCountForLength: issuedCountForLength + 1 }, { merge: true });
+    let assigned = null;
+    for (let tries = 0; tries < 400 && !assigned; tries++) {
+      const min = digits === 1 ? 1 : Math.pow(10, digits-1);
+      const max = Math.pow(10, digits) - 1;
+      const candidate = Math.floor(Math.random() * (max - min + 1)) + min;
+      const taken = await tx.get(db.collection('userIdLookup').doc(String(candidate)));
+      if (!taken.exists) {
+        tx.set(db.collection('userIdLookup').doc(String(candidate)), { uid, at: admin.firestore.FieldValue.serverTimestamp() });
+        tx.set(userRef, { userID: candidate }, { merge: true });
         assigned = candidate;
-        break;
       }
+      if (tries > 300) digits = Math.min(50, digits + 1); // widen if crowded
     }
-    if (!assigned) throw new functions.https.HttpsError('resource-exhausted','Could not allocate ID, retry.');
+
+    if (!assigned) {
+      digits = Math.min(50, digits + 1);
+      tx.set(metaRef, { digits }, { merge: true });
+      throw new functions.https.HttpsError('resource-exhausted','Could not allocate ID, try again');
+    }
+    tx.set(metaRef, { digits }, { merge: true });
   });
-  return { userID: assigned };
+
+  const after = (await userRef.get()).data().userID;
+  return { userID: after };
 });
 
-// ---------- Friend requests
-exports.sendFriendRequest = functions.https.onCall( async (data, context)=>{
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated','Sign in first.');
-  const fromUid = context.auth.uid;
-  const digits = (data.userIdDigits||'').replace(/\D/g,'');
-  if (!digits) throw new functions.https.HttpsError('invalid-argument','Provide a numeric ID.');
+/* -------- Friend request -------- */
+exports.sendFriendRequest = functions.https.onCall(async (data, context) => {
+  const fromUid = context.auth?.uid;
+  if (!fromUid) throw new functions.https.HttpsError('unauthenticated','Login required');
 
-  const lookup = await db.collection('userIdLookup').doc(digits).get();
-  if (!lookup.exists) throw new functions.https.HttpsError('not-found','No user with that ID.');
-  const toUid = lookup.data().uid;
-  if (toUid === fromUid) throw new functions.https.HttpsError('failed-precondition',"You can't add yourself.");
+  const raw = String(data?.userIdDigits||'').trim();
+  if (!/^\d+$/.test(raw)) throw new functions.https.HttpsError('invalid-argument','Digits only');
 
-  // Already friends?
-  const pairId = [fromUid,toUid].sort().join('_');
-  const pairRef = db.collection('friends').doc(pairId);
-  const pairSnap = await pairRef.get();
-  if (pairSnap.exists) return { message: "WDYM? He is your buddy already !" };
+  // find target by userID
+  const qs = await db.collection('users').where('userID','==', Number(raw)).limit(1).get();
+  if (qs.empty) throw new functions.https.HttpsError('not-found','No user with that ID');
+  const toUid = qs.docs[0].id;
+  if (toUid === fromUid) throw new functions.https.HttpsError('failed-precondition','Cannot add yourself');
 
-  // Pending request?
-  const existing = await db.collection('friendRequests')
+  // already friends?
+  const pairId = [fromUid, toUid].sort().join('_');
+  const already = await db.collection('friends').doc(pairId).get();
+  if (already.exists) return { message:'WDYM?, He is your buddy already !' };
+
+  // pending?
+  const pending = await db.collection('friendRequests')
     .where('fromUid','==',fromUid).where('toUid','==',toUid).where('status','==','pending').limit(1).get();
-  if (!existing.empty) return { message: 'Request already pending.' };
+  if (!pending.empty) return { message:'Request already sent' };
 
-  const from = await db.collection('users').doc(fromUid).get();
-  const to = await db.collection('users').doc(toUid).get();
+  const from = (await db.collection('users').doc(fromUid).get()).data()||{};
+  const to = (await db.collection('users').doc(toUid).get()).data()||{};
+
   await db.collection('friendRequests').add({
-    fromUid, toUid, fromUserID: from.data()?.userID || null, toUserID: to.data()?.userID || null,
-    status: 'pending', createdAt: admin.firestore.FieldValue.serverTimestamp()
+    fromUid, toUid,
+    fromUserID: from.userID || null,
+    toUserID: to.userID || null,
+    status: 'pending',
+    createdAt: FieldValue.serverTimestamp()
   });
-  return { message: 'Friend request sent.' };
+
+  return { message:'Request sent' };
 });
 
-// ---------- Room creation with hidden numeric code + invites
-exports.createRoom = functions.https.onCall(async (data, context)=>{
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated','Sign in first.');
-  const uid = context.auth.uid;
-  const roomName = (data.roomName||'').toString().slice(0,64).trim();
-  if (!roomName) throw new functions.https.HttpsError('invalid-argument','Room name required.');
+/* -------- Rooms -------- */
+exports.createRoom = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated','Login required');
 
-  // allocate roomCode
-  const stateRef = db.collection('roomCodeAllocator').doc('state');
-  await txGetOrCreate('roomCodeAllocator/state', { currentLength: 6, issuedCountForLength: 0 }); // start with 6 digits for rooms
-  let roomCode = null, roomId = null;
-  await db.runTransaction(async (t)=>{
-    const state = await t.get(stateRef);
-    let { currentLength, issuedCountForLength } = state.data();
-    const maxForLength = Math.pow(10, currentLength);
-    if (issuedCountForLength >= maxForLength){
-      currentLength += 1;
-      issuedCountForLength = 0;
-    }
-    const attempts = 20;
-    for (let i=0;i<attempts;i++){
-      const candidateNum = Math.floor(Math.random()*Math.pow(10,currentLength));
-      const candidate = (currentLength===1) ? String(candidateNum) : (''+candidateNum).padStart(currentLength,'0');
-      const claimRef = db.collection('roomCodeAllocator').doc(`assigned_${candidate}`);
-      const claim = await t.get(claimRef);
-      if (!claim.exists){
-        // Create room document
-        const ref = db.collection('rooms').doc();
-        t.set(ref, {
-          roomName, roomCode: candidate, createdBy: uid, createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          memberUids: [uid], memberCount: 1, active: true
-        });
-        // index
-        t.set(claimRef, { roomId: ref.id, createdAt: admin.firestore.FieldValue.serverTimestamp() });
-        // add creator as member
-        const prof = await db.collection('users').doc(uid).get();
-        t.set(ref.collection('members').doc(uid), {
-          displayName: prof.data()?.displayName || 'User',
-          userID: prof.data()?.userID || null,
-          joinedAt: admin.firestore.FieldValue.serverTimestamp(),
-          online: true
-        });
-        roomCode = candidate;
-        roomId = ref.id;
-        // update state
-        t.set(stateRef, { currentLength, issuedCountForLength: issuedCountForLength + 1 }, { merge: true });
-        break;
-      }
-    }
-    if (!roomId) throw new functions.https.HttpsError('resource-exhausted','Could not allocate room code, retry.');
+  const roomName = String(data?.roomName || 'Room').slice(0, 80);
+  const ref = await db.collection('rooms').add({
+    roomName,
+    createdBy: uid,
+    createdAt: FieldValue.serverTimestamp(),
+    memberUids: [uid],
+    memberCount: 1
   });
-  return { roomId, roomCode };
+  return { roomId: ref.id };
 });
 
-exports.sendRoomInvite = functions.https.onCall(async (data, context)=>{
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated','Sign in first.');
-  const fromUid = context.auth.uid;
-  const roomId = (data.roomId||'').toString();
-  const toUid = (data.toUid||'').toString();
-  if (!roomId || !toUid) throw new functions.https.HttpsError('invalid-argument','roomId and toUid required.');
+exports.sendRoomInvite = functions.https.onCall(async (data, context) => {
+  const fromUid = context.auth?.uid;
+  if (!fromUid) throw new functions.https.HttpsError('unauthenticated','Login required');
 
-  const roomRef = db.collection('rooms').doc(roomId);
-  const room = await roomRef.get();
-  if (!room.exists) throw new functions.https.HttpsError('not-found','Room not found.');
-  if (!(room.data().memberUids||[]).includes(fromUid)) throw new functions.https.HttpsError('permission-denied','Only members can invite.');
+  const roomId = String(data?.roomId||'');
+  const toUid = String(data?.toUid||'');
+  if (!roomId || !toUid) throw new functions.https.HttpsError('invalid-argument','roomId/toUid required');
 
-  const from = await db.collection('users').doc(fromUid).get();
-  const invite = await db.collection('roomInvites').add({
-    roomId, roomName: room.data().roomName, toUid, fromUid, fromName: from.data()?.displayName || 'User',
-    status: 'pending', createdAt: admin.firestore.FieldValue.serverTimestamp()
+  const room = await db.collection('rooms').doc(roomId).get();
+  if (!room.exists) throw new functions.https.HttpsError('not-found','Room missing');
+  const members = room.data().memberUids || [];
+  if (!members.includes(fromUid)) throw new functions.https.HttpsError('permission-denied','Only members can invite');
+
+  const from = (await db.collection('users').doc(fromUid).get()).data()||{};
+  await db.collection('roomInvites').add({
+    roomId,
+    roomName: room.data().roomName || 'Room',
+    fromUid,
+    fromName: from.displayName || 'Friend',
+    toUid,
+    status: 'pending',
+    createdAt: FieldValue.serverTimestamp()
   });
-  return { inviteId: invite.id };
-});
-
-exports.respondRoomInvite = functions.https.onCall(async (data, context)=>{
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated','Sign in first.');
-  const uid = context.auth.uid;
-  const inviteId = (data.inviteId||'').toString();
-  const action = (data.action||'').toString(); // accepted | rejected
-  const invRef = db.collection('roomInvites').doc(inviteId);
-  const inv = await invRef.get();
-  if (!inv.exists) throw new functions.https.HttpsError('not-found','Invite not found.');
-  const d = inv.data();
-  if (d.toUid !== uid) throw new functions.https.HttpsError('permission-denied','Not your invite.');
-  if (d.status !== 'pending') return { ok:true };
-
-  const roomRef = db.collection('rooms').doc(d.roomId);
-  if (action === 'accepted'){
-    await db.runTransaction(async (t)=>{
-      const room = await t.get(roomRef);
-      if (!room.exists) throw new functions.https.HttpsError('not-found','Room not found.');
-      const memberUids = room.data().memberUids || [];
-      if (!memberUids.includes(uid)){
-        memberUids.push(uid);
-        t.set(roomRef, { memberUids, memberCount: memberUids.length }, { merge:true });
-        const prof = await db.collection('users').doc(uid).get();
-        t.set(roomRef.collection('members').doc(uid), {
-          displayName: prof.data()?.displayName || 'User',
-          userID: prof.data()?.userID || null,
-          joinedAt: admin.firestore.FieldValue.serverTimestamp(),
-          online: true
-        });
-      }
-      t.set(invRef, { status: 'accepted' }, { merge:true });
-    });
-  }else{
-    await invRef.set({ status: 'rejected' }, { merge:true });
-  }
   return { ok:true };
 });
 
-// ---------- Presence mirroring: RTDB /status/{uid} -> Firestore /users/{uid}.online
-exports.mirrorPresence = functions.database.ref('/status/{uid}').onWrite(async (change, context)=>{
-  const uid = context.params.uid;
-  const online = change.after.exists() && change.after.val() && change.after.val().state === 'online';
-  await db.collection('users').doc(uid).set({ online }, { merge:true });
+exports.respondRoomInvite = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated','Login required');
+
+  const inviteId = String(data?.inviteId||'');
+  const action = String(data?.action||'').toLowerCase(); // 'accepted' | 'rejected'
+  if (!inviteId || !['accepted','rejected'].includes(action))
+    throw new functions.https.HttpsError('invalid-argument','Bad action');
+
+  const ref = db.collection('roomInvites').doc(inviteId);
+  await db.runTransaction(async (tx)=>{
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new functions.https.HttpsError('not-found','Invite missing');
+    const inv = snap.data();
+    if (inv.toUid !== uid) throw new functions.https.HttpsError('permission-denied','Not your invite');
+
+    // update invite status
+    tx.set(ref, { status: action }, { merge: true });
+
+    if (action === 'accepted'){
+      const roomRef = db.collection('rooms').doc(inv.roomId);
+      const room = await tx.get(roomRef);
+      if (!room.exists) throw new functions.https.HttpsError('not-found','Room missing');
+
+      const members = room.data().memberUids || [];
+      if (!members.includes(uid)){
+        tx.update(roomRef, {
+          memberUids: admin.firestore.FieldValue.arrayUnion(uid),
+          memberCount: (room.data().memberCount || members.length || 0) + 1
+        });
+      }
+      // create/merge a member profile doc (optional but handy)
+      tx.set(roomRef.collection('members').doc(uid), {
+        displayName: (await db.collection('users').doc(uid).get()).data()?.displayName || 'User',
+        userID: (await db.collection('users').doc(uid).get()).data()?.userID || null,
+        online: true,
+        joinedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+  });
+
+  return { ok:true };
 });
 
-// ---------- Room cleanup when last member leaves
-exports.roomMembersWatcher = functions.firestore.document('rooms/{roomId}/members/{uid}').onWrite(async (change, context)=>{
-  const roomId = context.params.roomId;
-  const roomRef = db.collection('rooms').doc(roomId);
-  const memRef = roomRef.collection('members');
-  const memSnap = await memRef.get();
-  const count = memSnap.size;
-  await roomRef.set({ memberCount: count, memberUids: memSnap.docs.map(d=>d.id) }, { merge:true });
-  if (count === 0){
-    // delete subcollections (signals, members, invites, candidates, etc.) and the room doc
-    // Use recursive delete if available
-    const { getFirestore } = require('firebase-admin/firestore');
-    const firestore = getFirestore();
-    await firestore.recursiveDelete(roomRef);
-  }
-});
+/* -------- (optional) presence mirror to Firestore for green dots -------- */
+exports.mirrorPresence = functions.database.ref('/status/{uid}')
+  .onWrite(async (change, context) => {
+    const uid = context.params.uid;
+    const val = change.after.val();
+    const online = !!val && val.state === 'online';
+    await db.collection('users').doc(uid).set(
+      { online, lastOnlineChange: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    return;
+  });

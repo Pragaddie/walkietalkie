@@ -1,22 +1,49 @@
+/* ===== Walkie-Talkie app.js (drop-in) ===== */
+
 let app, db, rtdb, auth, functions;
 let currentUser = null, currentProfile = null;
+
 let unsubFriends = null, unsubFriendReq = null, unsubRooms = null, unsubRoomInvites = null, unsubMembers = null;
 
 let pc, localStream, micTrack;
 let activeRoom = null, talking = false;
 
-// helpers
+/* ---------- tiny helpers ---------- */
 const $ = (id)=>document.getElementById(id);
-const on = (el,ev,cb,opts)=>el.addEventListener(ev,cb,opts||{});
-const show = (el,vis)=>{ el.style.display = vis ? 'block' : 'none'; };
-const pageEl = (name)=>document.getElementById('page-'+name);
-const escapeHtml = (s)=> (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]) );
-const uDot = (online)=> online ? '<span class="u-dot"></span>' : '';
+const on = (el,ev,cb,opts)=>el && el.addEventListener(ev,cb,opts||{});
+const show = (el,vis)=>{ if(!el) return; el.style.display = vis ? 'block' : 'none'; };
+const pageEl = (name)=>$('page-'+name);
+const escapeHtml = (s)=> (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+const uDot = (onl)=> onl ? '<span class="u-dot"></span>' : '';
+const nameWithDot = (nm,onl)=> `${escapeHtml(nm||'User')}${onl?uDot(true):''}`;
 
+/* hide the landing “Log in / Sign up” when logged in */
+function toggleAuthLanding(loggedIn){
+  const landing = $('page-auth-landing');
+  // If you added authCtas/authGreet, we’ll still hide whole landing when logged in
+  if (!landing) return;
+  landing.style.display = loggedIn ? 'none' : 'block';
+
+  // Optional greeting block support (if present in your HTML)
+  const ctas = $('authCtas'), greet = $('authGreet'), hiName = $('hiName');
+  if (ctas && greet){
+    ctas.style.display = loggedIn ? 'none' : 'flex';
+    greet.style.display = loggedIn ? 'grid' : 'none';
+    if (hiName && loggedIn){
+      hiName.textContent = (currentProfile && currentProfile.displayName) || 'Friend';
+    }
+  }
+}
+
+/* ---------- boot ---------- */
 window.addEventListener('DOMContentLoaded', async ()=>{
+  // Guard: make sure SDK + config are present
+  if (!window.firebase || !firebase.initializeApp){ alert('Firebase SDK not loaded.'); throw new Error('Firebase SDK not loaded'); }
+  if (!window.firebaseConfig){ alert('firebase-config.js missing'); throw new Error('firebase-config.js missing'); }
+
   app = firebase.initializeApp(firebaseConfig);
   db = firebase.firestore(); rtdb = firebase.database(); auth = firebase.auth();
-  functions = firebase.functions(); // set region if needed
+  functions = firebase.functions(); // set region if you deployed to a non-default region
 
   // status pills
   $('netPill').textContent = navigator.onLine ? 'Online' : 'Offline';
@@ -24,100 +51,99 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   window.addEventListener('offline', ()=> $('netPill').textContent='Offline');
   $('micPill').textContent = '—';
 
-  // landing buttons
-  $('toLoginBtn').onclick  = ()=>authNav('login');
-  $('toSignupBtn').onclick = ()=>authNav('signup');
+  /* landing buttons */
+  on($('toLoginBtn'),'click', ()=>authNav('login'));
+  on($('toSignupBtn'),'click',()=>authNav('signup'));
 
-  // login
-  $('loginSubmitBtn').onclick = login;
-  $('toResetBtn').onclick = ()=>authNav('reset');
-  $('backFromLoginBtn').onclick = ()=>authNav('landing');
+  /* login/signup/reset actions */
+  on($('loginSubmitBtn'),'click', login);
+  on($('toResetBtn'),'click',   ()=>authNav('reset'));
+  on($('backFromLoginBtn'),'click',  ()=>authNav('landing'));
 
-  // signup
-  $('signupSubmitBtn').onclick = signup;
-  $('backFromSignupBtn').onclick = ()=>authNav('landing');
+  on($('signupSubmitBtn'),'click', signup);
+  on($('backFromSignupBtn'),'click', ()=>authNav('landing'));
 
-  // reset
-  $('resetSubmitBtn').onclick = sendReset;
-  $('backFromResetBtn').onclick = ()=>authNav('login');
+  on($('resetSubmitBtn'),'click', sendReset);
+  on($('backFromResetBtn'),'click',  ()=>authNav('login'));
 
-  // tabs
+  /* tabs */
   document.querySelectorAll('.tab[data-page]').forEach(t=>on(t,'click',()=>setPage(t.dataset.page)));
-  $('logoutBtn').onclick = async ()=>{ await auth.signOut(); };
+  on($('logoutBtn'),'click', async ()=>{ try{ await auth.signOut(); }catch{} });
 
-  // friends
-  $('addFriendBtn').onclick = onAddFriend;
-  $('getIdBtn').onclick = getMyId;
+  /* friends */
+  on($('addFriendBtn'),'click', onAddFriend);
+  on($('getIdBtn'),     'click', getMyId);
 
-  // groups
-  $('createRoomBtn').onclick = onCreateRoom;
+  /* groups / room */
+  on($('createRoomBtn'),'click', onCreateRoom);
+  on($('inviteBtn'),    'click', onInviteFriend);
+  on($('leaveBtn'),     'click', onLeaveRoom);
 
-  // room
-  $('inviteBtn').onclick = onInviteFriend;
-  $('leaveBtn').onclick = onLeaveRoom;
-
-  // PTT
+  /* PTT */
   setupPTT();
 
-  // auth state
+  /* auth state */
   auth.onAuthStateChanged(async (user)=>{
     currentUser = user;
+
     if (!user){
-      setAuthUI(true);   // show landing
+      setAuthUI(true);
       teardownAll();
       currentProfile = null;
       updateUserPill(); updateMyIdBadge();
+      toggleAuthLanding(false);            // show landing (Log in / Sign up)
       return;
     }
+
     setAuthUI(false);
-    await ensureUserProfile();
+    await ensureUserProfile();             // create doc + allocate ID if needed
     updateUserPill(); updateMyIdBadge();
     wirePresence();
+
     listenFriends();
-    listenFriendRequests();
+    listenFriendRequests();                // no composite index needed
+    listenRoomInvites();                   // no composite index needed
     listenRooms();
-    listenRoomInvites();
+
     setPage('home');
+    toggleAuthLanding(true);               // hide landing when logged in
   });
 });
 
 /* ---------- AUTH UI NAV ---------- */
 function authNav(which){
-  // 'landing' | 'login' | 'signup' | 'reset'
+  // which: 'landing' | 'login' | 'signup' | 'reset'
   ['landing','login','signup','reset'].forEach(p=>{
-    show(document.getElementById('page-auth-'+p), p === which);
+    show($('page-auth-'+p), p===which);
   });
 }
 function setAuthUI(needAuth){
-  if (needAuth){
-    authNav('landing');
-  }
+  if (needAuth) authNav('landing');
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), false));
   document.querySelectorAll('.tab[data-page]').forEach(t=>{
     t.style.pointerEvents = needAuth ? 'none' : 'auto';
   });
 }
 function updateUserPill(){
-  const id = currentProfile?.userID;
-  $('userPill').textContent = 'ID ' + (id || '—');
+  $('userPill').textContent = 'ID ' + (currentProfile?.userID || '—');
 }
 function updateMyIdBadge(){
-  $('myIdBadge').textContent = 'Your ID: ' + (currentProfile?.userID || '—');
+  if ($('myIdBadge')) $('myIdBadge').textContent = 'Your ID: ' + (currentProfile?.userID || '—');
 }
 
 /* ---------- Auth actions ---------- */
 async function login(){
   try{
-    $('loginMsg').textContent = 'Signing in…';
+    $('loginMsg').textContent='Signing in…';
     await auth.signInWithEmailAndPassword($('loginEmail').value.trim(), $('loginPassword').value);
-    $('loginMsg').textContent = '';
+    $('loginMsg').textContent='';
   }catch(e){ $('loginMsg').textContent = e.message; }
 }
 async function signup(){
   try{
     const name = $('signupName').value.trim();
-    if (!name){ $('signupMsg').textContent = 'Please choose a username.'; return; }
-    $('signupMsg').textContent = 'Creating…';
+    if (!name){ $('signupMsg').textContent='Please choose a username.'; return; }
+    $('signupMsg').textContent='Creating…';
     await auth.createUserWithEmailAndPassword($('signupEmail').value.trim(), $('signupPassword').value);
     const uid = auth.currentUser.uid;
     await db.collection('users').doc(uid).set({
@@ -125,15 +151,15 @@ async function signup(){
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge:true });
     await allocateUserIdIfNeeded();
-    $('signupMsg').textContent = 'Done.';
+    $('signupMsg').textContent='Done.';
   }catch(e){ $('signupMsg').textContent = e.message; }
 }
 async function sendReset(){
   try{
     const email = $('resetEmail').value.trim();
-    if (!email){ $('resetMsg').textContent = 'Enter your email.'; return; }
+    if (!email){ $('resetMsg').textContent='Enter your email.'; return; }
     await auth.sendPasswordResetEmail(email);
-    $('resetMsg').textContent = 'Reset link sent. Check your email.';
+    $('resetMsg').textContent='Reset link sent. Check your email.';
   }catch(e){ $('resetMsg').textContent = e.message; }
 }
 async function ensureUserProfile(){
@@ -164,7 +190,6 @@ function teardownAll(){
   [unsubFriends,unsubFriendReq,unsubRooms,unsubRoomInvites,unsubMembers].forEach(fn=>{ try{ fn && fn(); }catch{} });
   unsubFriends=unsubFriendReq=unsubRooms=unsubRoomInvites=unsubMembers=null;
 }
-const nameWithDot = (name, online)=> `${escapeHtml(name||'User')}${online ? uDot(true) : ''}`;
 
 function listenFriends(){
   if (unsubFriends) unsubFriends();
@@ -172,47 +197,62 @@ function listenFriends(){
   const q = db.collection('friends').where('uids','array-contains', uid);
   unsubFriends = q.onSnapshot(async (qs)=>{
     const friendUids = [];
-    qs.forEach(doc=>{ const uids = doc.data().uids||[]; const other = uids.find(x=>x!==uid); if (other) friendUids.push(other); });
+    qs.forEach(doc=>{ const arr = doc.data().uids||[]; const other = arr.find(x=>x!==uid); if (other) friendUids.push(other); });
     if (!friendUids.length){
-      $('friendsList').textContent='—'; $('homeOnline').textContent='—'; $('inviteSelect').innerHTML='';
+      if ($('friendsList')) $('friendsList').textContent='—';
+      if ($('homeOnline')) $('homeOnline').textContent='—';
+      if ($('inviteSelect')) $('inviteSelect').innerHTML='';
       return;
     }
     const snaps = await Promise.all(friendUids.map(f=>db.collection('users').doc(f).get()));
     const all=[], online=[], options=[];
     snaps.forEach(s=>{
-      const d = s.data()||{}; const nm = d.displayName||'Friend'; const id = d.userID?('#'+d.userID):'';
-      const piece = `${nameWithDot(nm, !!d.online)} ${id}`;
+      const d = s.data()||{}; const nm = d.displayName || 'Friend'; const id = d.userID ? (' #'+d.userID) : '';
+      const piece = `${nameWithDot(nm, !!d.online)}${id}`;
       all.push(piece); if (d.online) online.push(piece);
-      options.push(`<option value="${s.id}">${escapeHtml(nm)} ${id}</option>`);
+      options.push(`<option value="${s.id}">${escapeHtml(nm)}${id}</option>`);
     });
-    $('friendsList').innerHTML = '• ' + all.join('<br>• ');
-    $('homeOnline').innerHTML = online.length ? online.join('<br>') : 'No friends online right now.';
-    $('inviteSelect').innerHTML = options.join('');
+    if ($('friendsList')) $('friendsList').innerHTML = '• ' + all.join('<br>• ');
+    if ($('homeOnline'))  $('homeOnline').innerHTML  = online.length ? online.join('<br>') : 'No friends online right now.';
+    if ($('inviteSelect')) $('inviteSelect').innerHTML = options.join('');
   });
 }
 
 function listenFriendRequests(){
   if (unsubFriendReq) unsubFriendReq();
   const uid = auth.currentUser.uid;
-  const q = db.collection('friendRequests').where('toUid','==',uid).where('status','==','pending').orderBy('createdAt','desc');
+
+  // Simple equality query so no composite index is needed.
+  const q = db.collection('friendRequests').where('toUid','==', uid);
+
   unsubFriendReq = q.onSnapshot(async (qs)=>{
-    if (qs.empty){ $('friendReqList').textContent='—'; return; }
-    const rows = await Promise.all(qs.docs.map(async doc=>{
-      const d = doc.data();
-      let fromName = 'Friend', fromOnline=false;
+    // Filter to 'pending' and sort by createdAt DESC on the client
+    const docs = qs.docs
+      .map(d => ({ id:d.id, ...d.data() }))
+      .filter(d => (d.status || 'pending') === 'pending')
+      .sort((a,b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+
+    if (!docs.length){ if ($('friendReqList')) $('friendReqList').textContent='—'; return; }
+
+    const rows = await Promise.all(docs.map(async d=>{
+      let fromName = 'Friend', fromOnline = false;
       try { const s = await db.collection('users').doc(d.fromUid).get(); const x = s.data()||{}; fromName = x.displayName||fromName; fromOnline = !!x.online; } catch {}
       const idText = d.fromUserID ? ` #${d.fromUserID}` : '';
       return `<div>From <b>${nameWithDot(fromName, fromOnline)}</b><span class="hint">${idText}</span>
-        <button class="btn" data-acc="${doc.id}">Accept</button>
-        <button class="btn" data-rej="${doc.id}">Reject</button></div>`;
+        <button class="btn" data-acc="${d.id}">Accept</button>
+        <button class="btn" data-rej="${d.id}">Reject</button></div>`;
     }));
-    $('friendReqList').innerHTML = rows.join('');
-    $('friendReqList').querySelectorAll('[data-acc]').forEach(b=>on(b,'click',()=>respondFriendReq(b.dataset.acc,'accepted')));
-    $('friendReqList').querySelectorAll('[data-rej]').forEach(b=>on(b,'click',()=>respondFriendReq(b.dataset.rej,'rejected')));
+
+    if ($('friendReqList')){
+      $('friendReqList').innerHTML = rows.join('');
+      $('friendReqList').querySelectorAll('[data-acc]').forEach(b=>on(b,'click',()=>respondFriendReq(b.dataset.acc,'accepted')));
+      $('friendReqList').querySelectorAll('[data-rej]').forEach(b=>on(b,'click',()=>respondFriendReq(b.dataset.rej,'rejected')));
+    }
   });
 }
 
 async function onAddFriend(){
+  if (!$('addFriendInput')) return;
   $('addFriendMsg').textContent='';
   const raw = $('addFriendInput').value.trim();
   if (!raw){ $('addFriendMsg').textContent='Enter an ID.'; return; }
@@ -231,8 +271,11 @@ async function respondFriendReq(reqId, action){
     const snap = await ref.get(); if (!snap.exists) return;
     const d = snap.data();
     if (action==='accepted'){
-      const pairId = [d.fromUid,d.toUid].sort().join('_');
-      await db.collection('friends').doc(pairId).set({ uids:[d.fromUid,d.toUid], createdAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge:true });
+      const pairId = [d.fromUid, d.toUid].sort().join('_');
+      await db.collection('friends').doc(pairId).set({
+        uids:[d.fromUid, d.toUid],
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge:true });
       await ref.set({ status:'accepted' }, { merge:true });
     }else{
       await ref.set({ status:'rejected' }, { merge:true });
@@ -240,16 +283,18 @@ async function respondFriendReq(reqId, action){
   }catch(e){ console.error(e); }
 }
 
-/* ---------- Groups ---------- */
+/* ---------- Rooms (groups) ---------- */
 function setPage(name){
   document.querySelectorAll('.tab[data-page]').forEach(t=>t.classList.toggle('active', t.dataset.page===name));
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), p===name));
 }
+
 function listenRooms(){
   if (unsubRooms) unsubRooms();
   const uid = auth.currentUser.uid;
   const q = db.collection('rooms').where('memberUids','array-contains', uid).orderBy('createdAt','desc');
   unsubRooms = q.onSnapshot((qs)=>{
+    if (!$('roomsList')) return;
     if (qs.empty){ $('roomsList').textContent='—'; return; }
     const out=[];
     qs.forEach(doc=>{
@@ -260,30 +305,44 @@ function listenRooms(){
     $('roomsList').querySelectorAll('[data-open]').forEach(b=>on(b,'click',()=>enterRoom(b.dataset.open)));
   });
 }
+
 function listenRoomInvites(){
   if (unsubRoomInvites) unsubRoomInvites();
   const uid = auth.currentUser.uid;
-  const q = db.collection('roomInvites').where('toUid','==', uid).where('status','==','pending').orderBy('createdAt','desc');
+
+  // Simple equality query so no composite index is required
+  const q = db.collection('roomInvites').where('toUid','==', uid);
+
   unsubRoomInvites = q.onSnapshot((qs)=>{
-    if (qs.empty){ $('invitesList').textContent='—'; return; }
-    const rows=[];
-    qs.forEach(doc=>{
-      const d = doc.data();
+    if (!$('invitesList')) return;
+
+    const docs = qs.docs
+      .map(d => ({ id:d.id, ...d.data() }))
+      .filter(d => (d.status || 'pending') === 'pending')
+      .sort((a,b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+
+    if (!docs.length){ $('invitesList').textContent='—'; return; }
+
+    const rows = docs.map(d=>{
       const from = d.fromName || 'Friend';
-      rows.push(`<div>Invite to <b>${escapeHtml(d.roomName||'Room')}</b> from <b>${escapeHtml(from)}</b>
-        <button class="btn" data-acc="${doc.id}">Join</button>
-        <button class="btn" data-rej="${doc.id}">Reject</button></div>`);
+      return `<div>Invite to <b>${escapeHtml(d.roomName||'Room')}</b> from <b>${escapeHtml(from)}</b>
+        <button class="btn" data-acc="${d.id}">Join</button>
+        <button class="btn" data-rej="${d.id}">Reject</button></div>`;
     });
+
     $('invitesList').innerHTML = rows.join('');
     $('invitesList').querySelectorAll('[data-acc]').forEach(b=>on(b,'click',()=>respondInvite(b.dataset.acc,'accepted')));
     $('invitesList').querySelectorAll('[data-rej]').forEach(b=>on(b,'click',()=>respondInvite(b.dataset.rej,'rejected')));
   });
 }
+
 async function respondInvite(inviteId, action){
   try{ await functions.httpsCallable('respondRoomInvite')({ inviteId, action }); }
   catch(e){ console.error(e); }
 }
+
 async function onCreateRoom(){
+  if (!$('roomNameInput')) return;
   $('groupsMsg').textContent='';
   const name = $('roomNameInput').value.trim();
   if (!name){ $('groupsMsg').textContent='Enter a group name.'; return; }
@@ -293,31 +352,35 @@ async function onCreateRoom(){
     await enterRoom(res.data.roomId);
   }catch(e){ $('groupsMsg').textContent = e.message; }
 }
+
 async function onInviteFriend(){
-  if (!activeRoom) return;
+  if (!activeRoom || !$('inviteSelect')) return;
   const toUid = $('inviteSelect').value;
-  if (!toUid){ return; }
+  if (!toUid) return;
   try{
     await functions.httpsCallable('sendRoomInvite')({ roomId: activeRoom.roomId, toUid });
-  }catch(e){
-    $('errors').textContent = e.message;
-  }
+  }catch(e){ if ($('errors')) $('errors').textContent = e.message; }
 }
+
 async function enterRoom(roomId){
   activeRoom = { roomId };
-  setPage('room'); $('errors').textContent=''; $('status').textContent='Status: Loading…'; $('pttBtn').disabled = true;
+  setPage('room');
+  if ($('errors')) $('errors').textContent='';
+  if ($('status')) $('status').textContent='Status: Loading…';
+  if ($('pttBtn')) $('pttBtn').disabled = true;
 
   if (unsubMembers) unsubMembers();
   const memCol = db.collection('rooms').doc(roomId).collection('members');
   unsubMembers = memCol.onSnapshot((qs)=>{
-    const names=[], online=[];
-    qs.forEach(doc=>{ const d=doc.data()||{}; const nm=d.displayName||'User'; names.push(nameWithDot(nm, !!d.online)); if (d.online) online.push(nm); });
-    $('memberCounts').textContent = `Members: ${qs.size} (Online: ${online.length})`;
+    if (!$('memberCounts') || !$('memberNames')) return;
+    const names=[], onlines=[];
+    qs.forEach(doc=>{ const d=doc.data()||{}; const nm=d.displayName||'User'; names.push(nameWithDot(nm, !!d.online)); if (d.online) onlines.push(nm); });
+    $('memberCounts').textContent = `Members: ${qs.size} (Online: ${onlines.length})`;
     $('memberNames').innerHTML = names.join('<br>') || '—';
   });
 
   const r = await db.collection('rooms').doc(roomId).get();
-  $('roomHeader').textContent = r.exists ? (r.data().roomName || 'Room') : 'Room';
+  if ($('roomHeader')) $('roomHeader').textContent = r.exists ? (r.data().roomName||'Room') : 'Room';
 
   const uid = auth.currentUser.uid;
   await memCol.doc(uid).set({
@@ -330,9 +393,10 @@ async function enterRoom(roomId){
   try{
     await setupMedia();
     await startPttSignaling(roomId);
-    $('pttBtn').disabled = false;
-  }catch(e){ $('errors').textContent = e.message; }
+    if ($('pttBtn')) $('pttBtn').disabled = false;
+  }catch(e){ if ($('errors')) $('errors').textContent = e.message; }
 }
+
 async function onLeaveRoom(){
   if (!activeRoom) return;
   teardownWebRTC();
@@ -355,32 +419,33 @@ async function allocateUserIdIfNeeded(){
   catch(e){ console.warn('ID allocation failed:', e); }
 }
 async function getMyId(){
-  if (!auth.currentUser){ $('getIdMsg').textContent = 'Please log in first.'; return; }
-  $('getIdMsg').textContent = 'Checking…';
+  if (!auth.currentUser){ if ($('getIdMsg')) $('getIdMsg').textContent='Please log in first.'; return; }
+  if ($('getIdMsg')) $('getIdMsg').textContent='Checking…';
   try{
     await allocateUserIdIfNeeded();
     const uid = auth.currentUser.uid;
     const snap = await db.collection('users').doc(uid).get();
     currentProfile = snap.data();
     updateUserPill(); updateMyIdBadge();
-    $('getIdMsg').textContent = currentProfile?.userID ? `Your ID is ${currentProfile.userID}` : 'Still no ID — check Functions deploy.';
-  }catch(e){ $('getIdMsg').textContent = `Couldn’t get ID: ${e.message}`; }
+    if ($('getIdMsg')) $('getIdMsg').textContent = currentProfile?.userID ? `Your ID is ${currentProfile.userID}` : 'Still no ID — check Functions deploy.';
+  }catch(e){ if ($('getIdMsg')) $('getIdMsg').textContent = `Couldn’t get ID: ${e.message}`; }
 }
 
 /* ---------- PTT / WebRTC ---------- */
 function setupPTT(){
-  const ptt = $('pttBtn'); let down = false;
+  const ptt = $('pttBtn'); if (!ptt) return;
+  let down = false;
   const begin = e=>{ e.preventDefault(); if(!down){down=true; beginTalk();} };
-  const end = e=>{ e.preventDefault(); if(down){down=false; endTalk();} };
+  const end   = e=>{ e.preventDefault(); if(down){down=false; endTalk();} };
   on(ptt,'mousedown',begin); on(ptt,'touchstart',begin,{passive:false});
   on(ptt,'mouseup',end); on(ptt,'mouseleave',end); on(ptt,'touchend',end); on(ptt,'touchcancel',end);
   window.addEventListener('keydown',(e)=>{ if(e.code==='Space'&&!down){ const t=(e.target.tagName||'').toLowerCase(); if (t==='input'||t==='textarea') return; e.preventDefault(); down=true; beginTalk(); } },{passive:false});
   window.addEventListener('keyup',(e)=>{ if(e.code==='Space'&&down){ const t=(e.target.tagName||'').toLowerCase(); if (t==='input'||t==='textarea') return; e.preventDefault(); down=false; endTalk(); } },{passive:false});
 }
 async function setupMedia(){
-  $('micPill').textContent = '…';
+  $('micPill').textContent='…';
   localStream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true }, video:false });
-  $('micPill').textContent = 'OK';
+  $('micPill').textContent='OK';
   micTrack = localStream.getAudioTracks()[0];
 }
 async function startPttSignaling(roomId){
@@ -391,10 +456,10 @@ async function startPttSignaling(roomId){
   micTrack.enabled = false;
   pc.addTrack(micTrack, localStream);
 
-  $('status').textContent = 'Status: Signaling…';
+  if ($('status')) $('status').textContent='Status: Signaling…';
 
   const remoteAudio = $('remoteAudio');
-  pc.addEventListener('track', (ev)=>{ remoteAudio.srcObject = ev.streams[0]; });
+  pc.addEventListener('track', (ev)=>{ if (remoteAudio) remoteAudio.srcObject = ev.streams[0]; });
 
   const roomRef = db.collection('rooms').doc(roomId);
   const callerCands = roomRef.collection('callerCandidates');
@@ -415,8 +480,8 @@ async function startPttSignaling(roomId){
       const data = snap.data();
       if (!pc.currentRemoteDescription && data?.answer){
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        $('status').textContent = 'Status: Connected';
-        $('pttBtn').disabled = false;
+        if ($('status')) $('status').textContent='Status: Connected';
+        if ($('pttBtn')) $('pttBtn').disabled=false;
       }
     });
     calleeCands.onSnapshot((qs)=>qs.docChanges().forEach(ch=>{
@@ -431,8 +496,8 @@ async function startPttSignaling(roomId){
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await roomRef.set({ answer: { type:answer.type, sdp:answer.sdp } }, { merge:true });
-        $('status').textContent = 'Status: Connected';
-        $('pttBtn').disabled = false;
+        if ($('status')) $('status').textContent='Status: Connected';
+        if ($('pttBtn')) $('pttBtn').disabled=false;
       }
     });
     callerCands.onSnapshot((qs)=>qs.docChanges().forEach(ch=>{
@@ -440,10 +505,12 @@ async function startPttSignaling(roomId){
     }));
   }
 }
-function beginTalk(){ if (!pc || !micTrack || talking) return; talking=true; micTrack.enabled=true; $('pttBtn').classList.add('talking'); }
-function endTalk(){ if (!pc || !micTrack || !talking) return; talking=false; micTrack.enabled=false; $('pttBtn').classList.remove('talking'); }
+function beginTalk(){ if (!pc || !micTrack || talking) return; talking=true; micTrack.enabled=true; $('pttBtn') && $('pttBtn').classList.add('talking'); }
+function endTalk(){ if (!pc || !micTrack || !talking) return; talking=false; micTrack.enabled=false; $('pttBtn') && $('pttBtn').classList.remove('talking'); }
 function teardownWebRTC(){
   try{ if (pc){ pc.getSenders().forEach(s=>{try{s.track&&s.track.stop();}catch{}}); pc.close(); } }catch{}
   pc=null; localStream=null; micTrack=null; talking=false;
-  $('pttBtn').disabled=true; $('status').textContent='Status: Idle'; $('pttBtn').classList.remove('talking');
+  if ($('pttBtn')) $('pttBtn').disabled=true;
+  if ($('status')) $('status').textContent='Status: Idle';
+  $('pttBtn') && $('pttBtn').classList.remove('talking');
 }

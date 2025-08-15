@@ -1,4 +1,4 @@
-/* ===== Walkie-Talkie app.js (audio autoplay fix + clean auth + invites/rooms) ===== */
+/* ===== Walkie-Talkie app.js (audio autoplay + TURN-ready + invites/rooms) ===== */
 
 let app, db, rtdb, auth, functions;
 let currentUser = null, currentProfile = null;
@@ -22,7 +22,6 @@ function toggleAuthLanding(loggedIn){
   const landing = $('page-auth-landing');
   if (!landing) return;
   landing.style.display = loggedIn ? 'none' : 'block';
-  // optional greeting block (if present)
   const ctas = $('authCtas'), greet = $('authGreet'), hi = $('hiName');
   if (ctas && greet){
     ctas.style.display = loggedIn ? 'none' : 'flex';
@@ -33,7 +32,6 @@ function toggleAuthLanding(loggedIn){
 
 /* ---------- boot ---------- */
 window.addEventListener('DOMContentLoaded', async ()=>{
-  // guard
   if (!window.firebase || !firebase.initializeApp){ alert('Firebase SDK not loaded'); throw new Error('Firebase SDK not loaded'); }
   if (typeof firebaseConfig === 'undefined'){ alert('firebase-config.js must load before app.js'); throw new Error('config missing'); }
 
@@ -41,17 +39,14 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   db = firebase.firestore(); rtdb = firebase.database(); auth = firebase.auth();
   functions = firebase.functions();
 
-  // status pills
   $('netPill').textContent = navigator.onLine ? 'Online' : 'Offline';
   window.addEventListener('online', ()=> $('netPill').textContent='Online');
   window.addEventListener('offline', ()=> $('netPill').textContent='Offline');
   $('micPill').textContent = '—';
 
-  // auth landing buttons
   on($('toLoginBtn'),'click', ()=>authNav('login'));
   on($('toSignupBtn'),'click',()=>authNav('signup'));
 
-  // login/signup/reset
   on($('loginSubmitBtn'),'click', login);
   on($('toResetBtn'),'click',   ()=>authNav('reset'));
   on($('backFromLoginBtn'),'click',  ()=>authNav('landing'));
@@ -60,21 +55,17 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   on($('resetSubmitBtn'),'click', sendReset);
   on($('backFromResetBtn'),'click',  ()=>authNav('login'));
 
-  // tabs + logout
   document.querySelectorAll('.tab[data-page]').forEach(t=>on(t,'click',()=>setPage(t.dataset.page)));
   on($('logoutBtn'),'click', async ()=>{ try{ await auth.signOut(); }catch{} });
 
-  // friends / groups / room
   on($('addFriendBtn'),'click', onAddFriend);
   on($('getIdBtn'),'click', getMyId);
   on($('createRoomBtn'),'click', onCreateRoom);
   on($('inviteBtn'),'click', onInviteFriend);
   on($('leaveBtn'),'click', onLeaveRoom);
 
-  // PTT
   setupPTT();
 
-  // auth state
   auth.onAuthStateChanged(async (user)=>{
     currentUser = user;
 
@@ -83,7 +74,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       teardownAll();
       currentProfile = null;
       updateUserPill(); updateMyIdBadge();
-      toggleAuthLanding(false);    // show landing when logged out
+      toggleAuthLanding(false);
       return;
     }
 
@@ -93,30 +84,24 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     wirePresence();
 
     listenFriends();
-    listenFriendRequests();        // simple queries (no composite index)
-    listenRoomInvites();           // simple queries (no composite index)
-    listenRooms();                 // simple query + client sort
+    listenFriendRequests();
+    listenRoomInvites();
+    listenRooms();
 
     setPage('home');
-    toggleAuthLanding(true);       // hide landing when logged in
+    toggleAuthLanding(true);
   });
 });
 
 /* ---------- AUTH UI NAV ---------- */
-function authNav(which){
-  ['landing','login','signup','reset'].forEach(p=> show($('page-auth-'+p), p===which));
-}
+function authNav(which){ ['landing','login','signup','reset'].forEach(p=> show($('page-auth-'+p), p===which)); }
 function setAuthUI(needAuth){
   if (needAuth) authNav('landing');
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), false));
   document.querySelectorAll('.tab[data-page]').forEach(t=> t.style.pointerEvents = needAuth ? 'none' : 'auto');
 }
-function updateUserPill(){
-  $('userPill').textContent = 'ID ' + (currentProfile?.userID || '—');
-}
-function updateMyIdBadge(){
-  if ($('myIdBadge')) $('myIdBadge').textContent = 'Your ID: ' + (currentProfile?.userID || '—');
-}
+function updateUserPill(){ $('userPill').textContent = 'ID ' + (currentProfile?.userID || '—'); }
+function updateMyIdBadge(){ if ($('myIdBadge')) $('myIdBadge').textContent = 'Your ID: ' + (currentProfile?.userID || '—'); }
 
 /* ---------- Auth actions ---------- */
 async function login(){
@@ -208,10 +193,7 @@ function listenFriends(){
 function listenFriendRequests(){
   if (unsubFriendReq) unsubFriendReq();
   const uid = auth.currentUser.uid;
-
-  // simple equality query; filter/sort client-side
   const q = db.collection('friendRequests').where('toUid','==', uid);
-
   unsubFriendReq = q.onSnapshot(async (qs)=>{
     const docs = qs.docs
       .map(d => ({ id:d.id, ...d.data() }))
@@ -276,12 +258,10 @@ function setPage(name){
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), p===name));
 }
 
-/* rooms list without composite index; sort on client */
 function listenRooms(){
   if (unsubRooms) unsubRooms();
   const uid = auth.currentUser.uid;
   const q = db.collection('rooms').where('memberUids','array-contains', uid);
-
   unsubRooms = q.onSnapshot((qs)=>{
     if (!$('roomsList')) return;
 
@@ -304,12 +284,10 @@ function listenRooms(){
   });
 }
 
-/* invites list (simple query) */
 function listenRoomInvites(){
   if (unsubRoomInvites) unsubRoomInvites();
   const uid = auth.currentUser.uid;
   const q = db.collection('roomInvites').where('toUid','==', uid);
-
   unsubRoomInvites = q.onSnapshot((qs)=>{
     if (!$('invitesList')) return;
 
@@ -333,7 +311,6 @@ function listenRoomInvites(){
   });
 }
 
-/* accept invite → go in immediately */
 async function respondInvite(inviteId, action){
   try{
     const snap = await db.collection('roomInvites').doc(inviteId).get();
@@ -439,7 +416,7 @@ async function getMyId(){
   }catch(e){ if ($('getIdMsg')) $('getIdMsg').textContent = `Couldn’t get ID: ${e.message}`; }
 }
 
-/* ---------- PTT / WebRTC (with autoplay fix) ---------- */
+/* ---------- PTT / WebRTC (with autoplay + TURN-ready) ---------- */
 function setupPTT(){
   const ptt = $('pttBtn'); if (!ptt) return;
   let down = false;
@@ -459,7 +436,6 @@ async function setupMedia(){
 
 /* Autoplay-safe + TURN-ready signaling */
 async function startPttSignaling(roomId){
-  // Use global ICE servers if provided (window.ICE_SERVERS), otherwise STUN-only.
   const ICE_SERVERS = (window.ICE_SERVERS && Array.isArray(window.ICE_SERVERS) && window.ICE_SERVERS.length)
     ? window.ICE_SERVERS
     : [{ urls: [ 'stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302' ] }];
@@ -481,6 +457,8 @@ async function startPttSignaling(roomId){
 
   function ensureAudioPlayback(){
     if (!remoteAudio) return;
+    // make sure the element is visible so some mobile browsers allow play
+    remoteAudio.style.display = 'block';
     remoteAudio.play().catch(()=>{
       let gate = document.getElementById('unmuteGate');
       if (!gate){
@@ -560,7 +538,6 @@ async function startPttSignaling(roomId){
     }));
   }
 
-  // If ICE can’t connect in ~10s, hint TURN
   setTimeout(()=>{
     if (pc && ['failed','disconnected'].includes(pc.iceConnectionState)){
       const hint = 'No audio? Your networks may need a TURN server.';

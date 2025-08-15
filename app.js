@@ -1,4 +1,4 @@
-/* ===== Walkie-Talkie app.js (joined room visibility + clean auth) ===== */
+/* ===== Walkie-Talkie app.js (audio autoplay fix + clean auth + invites/rooms) ===== */
 
 let app, db, rtdb, auth, functions;
 let currentUser = null, currentProfile = null;
@@ -17,13 +17,12 @@ const escapeHtml = (s)=> (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;
 const uDot = (onl)=> onl ? '<span class="u-dot"></span>' : '';
 const nameWithDot = (nm,onl)=> `${escapeHtml(nm||'User')}${onl?uDot(true):''}`;
 
-/* hide the landing “Log in / Sign up” when logged in */
+/* hide landing when logged in */
 function toggleAuthLanding(loggedIn){
   const landing = $('page-auth-landing');
   if (!landing) return;
   landing.style.display = loggedIn ? 'none' : 'block';
-
-  // Optional greeting (if present in HTML)
+  // optional greeting block (if present)
   const ctas = $('authCtas'), greet = $('authGreet'), hi = $('hiName');
   if (ctas && greet){
     ctas.style.display = loggedIn ? 'none' : 'flex';
@@ -94,9 +93,9 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     wirePresence();
 
     listenFriends();
-    listenFriendRequests();        // no composite index needed
-    listenRoomInvites();           // no composite index needed
-    listenRooms();                 // no index needed
+    listenFriendRequests();        // simple queries (no composite index)
+    listenRoomInvites();           // simple queries (no composite index)
+    listenRooms();                 // simple query + client sort
 
     setPage('home');
     toggleAuthLanding(true);       // hide landing when logged in
@@ -210,7 +209,8 @@ function listenFriendRequests(){
   if (unsubFriendReq) unsubFriendReq();
   const uid = auth.currentUser.uid;
 
-  const q = db.collection('friendRequests').where('toUid','==', uid); // simple query
+  // simple equality query; filter/sort client-side
+  const q = db.collection('friendRequests').where('toUid','==', uid);
 
   unsubFriendReq = q.onSnapshot(async (qs)=>{
     const docs = qs.docs
@@ -276,11 +276,11 @@ function setPage(name){
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), p===name));
 }
 
-/* show rooms without index; sort on client */
+/* rooms list without composite index; sort on client */
 function listenRooms(){
   if (unsubRooms) unsubRooms();
   const uid = auth.currentUser.uid;
-  const q = db.collection('rooms').where('memberUids','array-contains', uid); // simple query
+  const q = db.collection('rooms').where('memberUids','array-contains', uid);
 
   unsubRooms = q.onSnapshot((qs)=>{
     if (!$('roomsList')) return;
@@ -304,7 +304,7 @@ function listenRooms(){
   });
 }
 
-/* invite list (simple query) */
+/* invites list (simple query) */
 function listenRoomInvites(){
   if (unsubRoomInvites) unsubRoomInvites();
   const uid = auth.currentUser.uid;
@@ -333,7 +333,7 @@ function listenRoomInvites(){
   });
 }
 
-/* IMPORTANT: open room immediately after accepting */
+/* accept invite → go in immediately */
 async function respondInvite(inviteId, action){
   try{
     const snap = await db.collection('roomInvites').doc(inviteId).get();
@@ -342,7 +342,7 @@ async function respondInvite(inviteId, action){
     await functions.httpsCallable('respondRoomInvite')({ inviteId, action });
 
     if (action === 'accepted' && roomId){
-      await enterRoom(roomId); // go in right away
+      await enterRoom(roomId);
     }
   }catch(e){
     console.error(e);
@@ -439,7 +439,7 @@ async function getMyId(){
   }catch(e){ if ($('getIdMsg')) $('getIdMsg').textContent = `Couldn’t get ID: ${e.message}`; }
 }
 
-/* ---------- PTT / WebRTC ---------- */
+/* ---------- PTT / WebRTC (with autoplay fix) ---------- */
 function setupPTT(){
   const ptt = $('pttBtn'); if (!ptt) return;
   let down = false;
@@ -456,18 +456,61 @@ async function setupMedia(){
   $('micPill').textContent='OK';
   micTrack = localStream.getAudioTracks()[0];
 }
+
+/* Autoplay-safe + TURN-ready signaling */
 async function startPttSignaling(roomId){
-  const rtcConfig = { iceServers: [
-    { urls: [ 'stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478' ] }
-  ]};
+  // Use global ICE servers if provided (window.ICE_SERVERS), otherwise STUN-only.
+  const ICE_SERVERS = (window.ICE_SERVERS && Array.isArray(window.ICE_SERVERS) && window.ICE_SERVERS.length)
+    ? window.ICE_SERVERS
+    : [{ urls: [ 'stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302' ] }];
+
+  const rtcConfig = { iceServers: ICE_SERVERS };
   pc = new RTCPeerConnection(rtcConfig);
+
   micTrack.enabled = false;
   pc.addTrack(micTrack, localStream);
 
   if ($('status')) $('status').textContent='Status: Signaling…';
 
   const remoteAudio = $('remoteAudio');
-  pc.addEventListener('track', (ev)=>{ if (remoteAudio) remoteAudio.srcObject = ev.streams[0]; });
+  if (remoteAudio){
+    remoteAudio.autoplay = true;
+    remoteAudio.playsInline = true;
+    remoteAudio.muted = false;
+  }
+
+  function ensureAudioPlayback(){
+    if (!remoteAudio) return;
+    remoteAudio.play().catch(()=>{
+      let gate = document.getElementById('unmuteGate');
+      if (!gate){
+        gate = document.createElement('button');
+        gate.id = 'unmuteGate';
+        gate.className = 'btn';
+        gate.textContent = 'Tap to enable sound';
+        gate.style.marginTop = '8px';
+        const holder = $('page-room') || document.body;
+        holder.appendChild(gate);
+        gate.onclick = () => remoteAudio.play().then(()=> gate.remove()).catch(()=>{});
+      }
+    });
+  }
+
+  pc.addEventListener('track', (ev)=>{
+    if (remoteAudio){
+      remoteAudio.srcObject = ev.streams[0];
+      ensureAudioPlayback();
+    }
+  });
+
+  pc.oniceconnectionstatechange = ()=>{
+    const s = pc.iceConnectionState;
+    if ($('status')) $('status').textContent = 'ICE: ' + s;
+  };
+  pc.onconnectionstatechange = ()=>{
+    const s = pc.connectionState;
+    if ($('status')) $('status').textContent = 'Peer: ' + s;
+  };
 
   const roomRef = db.collection('rooms').doc(roomId);
   const callerCands = roomRef.collection('callerCandidates');
@@ -484,12 +527,14 @@ async function startPttSignaling(roomId){
     const offer = await pc.createOffer({ offerToReceiveAudio:true });
     await pc.setLocalDescription(offer);
     await roomRef.set({ offer: { type:offer.type, sdp:offer.sdp } }, { merge:true });
+
     roomRef.onSnapshot(async (snap)=>{
       const data = snap.data();
       if (!pc.currentRemoteDescription && data?.answer){
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         if ($('status')) $('status').textContent='Status: Connected';
         if ($('pttBtn')) $('pttBtn').disabled=false;
+        ensureAudioPlayback();
       }
     });
     calleeCands.onSnapshot((qs)=>qs.docChanges().forEach(ch=>{
@@ -497,6 +542,7 @@ async function startPttSignaling(roomId){
     }));
   }else{
     pc.addEventListener('icecandidate', (e)=>{ if(e.candidate) calleeCands.add(e.candidate.toJSON()); });
+
     roomRef.onSnapshot(async (snap)=>{
       const data = snap.data();
       if (data?.offer && !pc.currentRemoteDescription){
@@ -506,13 +552,23 @@ async function startPttSignaling(roomId){
         await roomRef.set({ answer: { type:answer.type, sdp:answer.sdp } }, { merge:true });
         if ($('status')) $('status').textContent='Status: Connected';
         if ($('pttBtn')) $('pttBtn').disabled=false;
+        ensureAudioPlayback();
       }
     });
     callerCands.onSnapshot((qs)=>qs.docChanges().forEach(ch=>{
       if (ch.type==='added'){ pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())); }
     }));
   }
+
+  // If ICE can’t connect in ~10s, hint TURN
+  setTimeout(()=>{
+    if (pc && ['failed','disconnected'].includes(pc.iceConnectionState)){
+      const hint = 'No audio? Your networks may need a TURN server.';
+      if ($('errors')) $('errors').textContent = hint;
+    }
+  }, 10000);
 }
+
 function beginTalk(){ if (!pc || !micTrack || talking) return; talking=true; micTrack.enabled=true; $('pttBtn') && $('pttBtn').classList.add('talking'); }
 function endTalk(){ if (!pc || !micTrack || !talking) return; talking=false; micTrack.enabled=false; $('pttBtn') && $('pttBtn').classList.remove('talking'); }
 function teardownWebRTC(){

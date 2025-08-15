@@ -1,4 +1,4 @@
-/* ===== Walkie-Talkie app.js (clean fix) ===== */
+/* ===== Walkie-Talkie app.js (joined room visibility + clean auth) ===== */
 
 let app, db, rtdb, auth, functions;
 let currentUser = null, currentProfile = null;
@@ -8,7 +8,7 @@ let unsubFriends = null, unsubFriendReq = null, unsubRooms = null, unsubRoomInvi
 let pc, localStream, micTrack;
 let activeRoom = null, talking = false;
 
-/* ---------- small helpers ---------- */
+/* ---------- tiny helpers ---------- */
 const $ = (id)=>document.getElementById(id);
 const on = (el,ev,cb,opts)=>el && el.addEventListener(ev,cb,opts||{});
 const show = (el,vis)=>{ if(!el) return; el.style.display = vis ? 'block' : 'none'; };
@@ -17,12 +17,13 @@ const escapeHtml = (s)=> (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;
 const uDot = (onl)=> onl ? '<span class="u-dot"></span>' : '';
 const nameWithDot = (nm,onl)=> `${escapeHtml(nm||'User')}${onl?uDot(true):''}`;
 
-/* hide landing when logged in */
+/* hide the landing “Log in / Sign up” when logged in */
 function toggleAuthLanding(loggedIn){
   const landing = $('page-auth-landing');
   if (!landing) return;
   landing.style.display = loggedIn ? 'none' : 'block';
-  // optional greeting block if present
+
+  // Optional greeting (if present in HTML)
   const ctas = $('authCtas'), greet = $('authGreet'), hi = $('hiName');
   if (ctas && greet){
     ctas.style.display = loggedIn ? 'none' : 'flex';
@@ -33,13 +34,13 @@ function toggleAuthLanding(loggedIn){
 
 /* ---------- boot ---------- */
 window.addEventListener('DOMContentLoaded', async ()=>{
-  // guard (correct check for config)
+  // guard
   if (!window.firebase || !firebase.initializeApp){ alert('Firebase SDK not loaded'); throw new Error('Firebase SDK not loaded'); }
-  if (typeof firebaseConfig === 'undefined'){ alert('firebase-config.js did not load (must be before app.js)'); throw new Error('config missing'); }
+  if (typeof firebaseConfig === 'undefined'){ alert('firebase-config.js must load before app.js'); throw new Error('config missing'); }
 
   app = firebase.initializeApp(firebaseConfig);
   db = firebase.firestore(); rtdb = firebase.database(); auth = firebase.auth();
-  functions = firebase.functions(); // set region if you deployed elsewhere
+  functions = firebase.functions();
 
   // status pills
   $('netPill').textContent = navigator.onLine ? 'Online' : 'Offline';
@@ -55,10 +56,8 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   on($('loginSubmitBtn'),'click', login);
   on($('toResetBtn'),'click',   ()=>authNav('reset'));
   on($('backFromLoginBtn'),'click',  ()=>authNav('landing'));
-
   on($('signupSubmitBtn'),'click', signup);
   on($('backFromSignupBtn'),'click', ()=>authNav('landing'));
-
   on($('resetSubmitBtn'),'click', sendReset);
   on($('backFromResetBtn'),'click',  ()=>authNav('login'));
 
@@ -73,7 +72,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   on($('inviteBtn'),'click', onInviteFriend);
   on($('leaveBtn'),'click', onLeaveRoom);
 
-  // mic / ptt
+  // PTT
   setupPTT();
 
   // auth state
@@ -85,7 +84,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       teardownAll();
       currentProfile = null;
       updateUserPill(); updateMyIdBadge();
-      toggleAuthLanding(false);      // show landing when logged out
+      toggleAuthLanding(false);    // show landing when logged out
       return;
     }
 
@@ -95,12 +94,12 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     wirePresence();
 
     listenFriends();
-    listenFriendRequests();          // simplified queries (no indexes)
-    listenRoomInvites();             // simplified queries (no indexes)
-    listenRooms();
+    listenFriendRequests();        // no composite index needed
+    listenRoomInvites();           // no composite index needed
+    listenRooms();                 // no index needed
 
     setPage('home');
-    toggleAuthLanding(true);         // hide landing when logged in
+    toggleAuthLanding(true);       // hide landing when logged in
   });
 });
 
@@ -162,7 +161,7 @@ async function ensureUserProfile(){
   currentProfile = (await ref.get()).data();
 }
 
-/* ---------- Presence (RTDB -> online dot) ---------- */
+/* ---------- Presence (RTDB) ---------- */
 function wirePresence(){
   const uid = auth.currentUser.uid;
   const statusRef = rtdb.ref('/status/'+uid);
@@ -211,8 +210,7 @@ function listenFriendRequests(){
   if (unsubFriendReq) unsubFriendReq();
   const uid = auth.currentUser.uid;
 
-  // simple equality query, then filter/sort on client (no index required)
-  const q = db.collection('friendRequests').where('toUid','==', uid);
+  const q = db.collection('friendRequests').where('toUid','==', uid); // simple query
 
   unsubFriendReq = q.onSnapshot(async (qs)=>{
     const docs = qs.docs
@@ -278,28 +276,38 @@ function setPage(name){
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), p===name));
 }
 
+/* show rooms without index; sort on client */
 function listenRooms(){
   if (unsubRooms) unsubRooms();
   const uid = auth.currentUser.uid;
-  const q = db.collection('rooms').where('memberUids','array-contains', uid).orderBy('createdAt','desc');
+  const q = db.collection('rooms').where('memberUids','array-contains', uid); // simple query
+
   unsubRooms = q.onSnapshot((qs)=>{
     if (!$('roomsList')) return;
-    if (qs.empty){ $('roomsList').textContent='—'; return; }
-    const out=[];
-    qs.forEach(doc=>{
-      const d = doc.data(); const name = d.roomName || 'Room';
-      out.push(`<div><b>${escapeHtml(name)}</b> <span class="hint">(Members: ${d.memberCount||1})</span> <button class="btn" data-open="${doc.id}">Open</button></div>`);
-    });
+
+    const docs = qs.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a,b)=> (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+
+    if (!docs.length){ $('roomsList').textContent = '—'; return; }
+
+    const out = docs.map(d =>
+      `<div><b>${escapeHtml(d.roomName || 'Room')}</b>
+        <span class="hint">(Members: ${d.memberCount || (d.memberUids?.length || 1)})</span>
+        <button class="btn" data-open="${d.id}">Open</button>
+       </div>`
+    );
+
     $('roomsList').innerHTML = out.join('');
-    $('roomsList').querySelectorAll('[data-open]').forEach(b=>on(b,'click',()=>enterRoom(b.dataset.open)));
+    $('roomsList').querySelectorAll('[data-open]')
+      .forEach(b => b.onclick = () => enterRoom(b.dataset.open));
   });
 }
 
+/* invite list (simple query) */
 function listenRoomInvites(){
   if (unsubRoomInvites) unsubRoomInvites();
   const uid = auth.currentUser.uid;
-
-  // simple equality query; filter/sort client-side
   const q = db.collection('roomInvites').where('toUid','==', uid);
 
   unsubRoomInvites = q.onSnapshot((qs)=>{
@@ -308,8 +316,7 @@ function listenRoomInvites(){
     const docs = qs.docs
       .map(d => ({ id:d.id, ...d.data() }))
       .filter(d => (d.status || 'pending') === 'pending')
-      .sort((a,b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
-      .reverse();
+      .sort((a,b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
 
     if (!docs.length){ $('invitesList').textContent='—'; return; }
 
@@ -326,9 +333,20 @@ function listenRoomInvites(){
   });
 }
 
+/* IMPORTANT: open room immediately after accepting */
 async function respondInvite(inviteId, action){
-  try{ await functions.httpsCallable('respondRoomInvite')({ inviteId, action }); }
-  catch(e){ console.error(e); }
+  try{
+    const snap = await db.collection('roomInvites').doc(inviteId).get();
+    const roomId = snap.exists ? (snap.data().roomId || null) : null;
+
+    await functions.httpsCallable('respondRoomInvite')({ inviteId, action });
+
+    if (action === 'accepted' && roomId){
+      await enterRoom(roomId); // go in right away
+    }
+  }catch(e){
+    console.error(e);
+  }
 }
 
 async function onCreateRoom(){

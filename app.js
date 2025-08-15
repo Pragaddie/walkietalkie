@@ -1,4 +1,4 @@
-/* ===== Walkie-Talkie app.js (drop-in) ===== */
+/* ===== Walkie-Talkie app.js (clean fix) ===== */
 
 let app, db, rtdb, auth, functions;
 let currentUser = null, currentProfile = null;
@@ -8,7 +8,7 @@ let unsubFriends = null, unsubFriendReq = null, unsubRooms = null, unsubRoomInvi
 let pc, localStream, micTrack;
 let activeRoom = null, talking = false;
 
-/* ---------- tiny helpers ---------- */
+/* ---------- small helpers ---------- */
 const $ = (id)=>document.getElementById(id);
 const on = (el,ev,cb,opts)=>el && el.addEventListener(ev,cb,opts||{});
 const show = (el,vis)=>{ if(!el) return; el.style.display = vis ? 'block' : 'none'; };
@@ -17,33 +17,29 @@ const escapeHtml = (s)=> (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;
 const uDot = (onl)=> onl ? '<span class="u-dot"></span>' : '';
 const nameWithDot = (nm,onl)=> `${escapeHtml(nm||'User')}${onl?uDot(true):''}`;
 
-/* hide the landing “Log in / Sign up” when logged in */
+/* hide landing when logged in */
 function toggleAuthLanding(loggedIn){
   const landing = $('page-auth-landing');
-  // If you added authCtas/authGreet, we’ll still hide whole landing when logged in
   if (!landing) return;
   landing.style.display = loggedIn ? 'none' : 'block';
-
-  // Optional greeting block support (if present in your HTML)
-  const ctas = $('authCtas'), greet = $('authGreet'), hiName = $('hiName');
+  // optional greeting block if present
+  const ctas = $('authCtas'), greet = $('authGreet'), hi = $('hiName');
   if (ctas && greet){
     ctas.style.display = loggedIn ? 'none' : 'flex';
     greet.style.display = loggedIn ? 'grid' : 'none';
-    if (hiName && loggedIn){
-      hiName.textContent = (currentProfile && currentProfile.displayName) || 'Friend';
-    }
+    if (loggedIn && hi) hi.textContent = (currentProfile?.displayName || 'Friend');
   }
 }
 
 /* ---------- boot ---------- */
 window.addEventListener('DOMContentLoaded', async ()=>{
-  // Guard: make sure SDK + config are present
-  if (!window.firebase || !firebase.initializeApp){ alert('Firebase SDK not loaded.'); throw new Error('Firebase SDK not loaded'); }
-  if (!window.firebaseConfig){ alert('firebase-config.js missing'); throw new Error('firebase-config.js missing'); }
+  // guard (correct check for config)
+  if (!window.firebase || !firebase.initializeApp){ alert('Firebase SDK not loaded'); throw new Error('Firebase SDK not loaded'); }
+  if (typeof firebaseConfig === 'undefined'){ alert('firebase-config.js did not load (must be before app.js)'); throw new Error('config missing'); }
 
   app = firebase.initializeApp(firebaseConfig);
   db = firebase.firestore(); rtdb = firebase.database(); auth = firebase.auth();
-  functions = firebase.functions(); // set region if you deployed to a non-default region
+  functions = firebase.functions(); // set region if you deployed elsewhere
 
   // status pills
   $('netPill').textContent = navigator.onLine ? 'Online' : 'Offline';
@@ -51,11 +47,11 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   window.addEventListener('offline', ()=> $('netPill').textContent='Offline');
   $('micPill').textContent = '—';
 
-  /* landing buttons */
+  // auth landing buttons
   on($('toLoginBtn'),'click', ()=>authNav('login'));
   on($('toSignupBtn'),'click',()=>authNav('signup'));
 
-  /* login/signup/reset actions */
+  // login/signup/reset
   on($('loginSubmitBtn'),'click', login);
   on($('toResetBtn'),'click',   ()=>authNav('reset'));
   on($('backFromLoginBtn'),'click',  ()=>authNav('landing'));
@@ -66,23 +62,21 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   on($('resetSubmitBtn'),'click', sendReset);
   on($('backFromResetBtn'),'click',  ()=>authNav('login'));
 
-  /* tabs */
+  // tabs + logout
   document.querySelectorAll('.tab[data-page]').forEach(t=>on(t,'click',()=>setPage(t.dataset.page)));
   on($('logoutBtn'),'click', async ()=>{ try{ await auth.signOut(); }catch{} });
 
-  /* friends */
+  // friends / groups / room
   on($('addFriendBtn'),'click', onAddFriend);
-  on($('getIdBtn'),     'click', getMyId);
-
-  /* groups / room */
+  on($('getIdBtn'),'click', getMyId);
   on($('createRoomBtn'),'click', onCreateRoom);
-  on($('inviteBtn'),    'click', onInviteFriend);
-  on($('leaveBtn'),     'click', onLeaveRoom);
+  on($('inviteBtn'),'click', onInviteFriend);
+  on($('leaveBtn'),'click', onLeaveRoom);
 
-  /* PTT */
+  // mic / ptt
   setupPTT();
 
-  /* auth state */
+  // auth state
   auth.onAuthStateChanged(async (user)=>{
     currentUser = user;
 
@@ -91,38 +85,33 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       teardownAll();
       currentProfile = null;
       updateUserPill(); updateMyIdBadge();
-      toggleAuthLanding(false);            // show landing (Log in / Sign up)
+      toggleAuthLanding(false);      // show landing when logged out
       return;
     }
 
     setAuthUI(false);
-    await ensureUserProfile();             // create doc + allocate ID if needed
+    await ensureUserProfile();
     updateUserPill(); updateMyIdBadge();
     wirePresence();
 
     listenFriends();
-    listenFriendRequests();                // no composite index needed
-    listenRoomInvites();                   // no composite index needed
+    listenFriendRequests();          // simplified queries (no indexes)
+    listenRoomInvites();             // simplified queries (no indexes)
     listenRooms();
 
     setPage('home');
-    toggleAuthLanding(true);               // hide landing when logged in
+    toggleAuthLanding(true);         // hide landing when logged in
   });
 });
 
 /* ---------- AUTH UI NAV ---------- */
 function authNav(which){
-  // which: 'landing' | 'login' | 'signup' | 'reset'
-  ['landing','login','signup','reset'].forEach(p=>{
-    show($('page-auth-'+p), p===which);
-  });
+  ['landing','login','signup','reset'].forEach(p=> show($('page-auth-'+p), p===which));
 }
 function setAuthUI(needAuth){
   if (needAuth) authNav('landing');
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), false));
-  document.querySelectorAll('.tab[data-page]').forEach(t=>{
-    t.style.pointerEvents = needAuth ? 'none' : 'auto';
-  });
+  document.querySelectorAll('.tab[data-page]').forEach(t=> t.style.pointerEvents = needAuth ? 'none' : 'auto');
 }
 function updateUserPill(){
   $('userPill').textContent = 'ID ' + (currentProfile?.userID || '—');
@@ -173,7 +162,7 @@ async function ensureUserProfile(){
   currentProfile = (await ref.get()).data();
 }
 
-/* ---------- Presence (RTDB) ---------- */
+/* ---------- Presence (RTDB -> online dot) ---------- */
 function wirePresence(){
   const uid = auth.currentUser.uid;
   const statusRef = rtdb.ref('/status/'+uid);
@@ -222,20 +211,20 @@ function listenFriendRequests(){
   if (unsubFriendReq) unsubFriendReq();
   const uid = auth.currentUser.uid;
 
-  // Simple equality query so no composite index is needed.
+  // simple equality query, then filter/sort on client (no index required)
   const q = db.collection('friendRequests').where('toUid','==', uid);
 
   unsubFriendReq = q.onSnapshot(async (qs)=>{
-    // Filter to 'pending' and sort by createdAt DESC on the client
     const docs = qs.docs
       .map(d => ({ id:d.id, ...d.data() }))
       .filter(d => (d.status || 'pending') === 'pending')
-      .sort((a,b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+      .sort((a,b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
+      .reverse();
 
     if (!docs.length){ if ($('friendReqList')) $('friendReqList').textContent='—'; return; }
 
     const rows = await Promise.all(docs.map(async d=>{
-      let fromName = 'Friend', fromOnline = false;
+      let fromName = 'Friend', fromOnline=false;
       try { const s = await db.collection('users').doc(d.fromUid).get(); const x = s.data()||{}; fromName = x.displayName||fromName; fromOnline = !!x.online; } catch {}
       const idText = d.fromUserID ? ` #${d.fromUserID}` : '';
       return `<div>From <b>${nameWithDot(fromName, fromOnline)}</b><span class="hint">${idText}</span>
@@ -283,7 +272,7 @@ async function respondFriendReq(reqId, action){
   }catch(e){ console.error(e); }
 }
 
-/* ---------- Rooms (groups) ---------- */
+/* ---------- Groups (rooms) ---------- */
 function setPage(name){
   document.querySelectorAll('.tab[data-page]').forEach(t=>t.classList.toggle('active', t.dataset.page===name));
   ['home','friends','groups','room'].forEach(p=> show(pageEl(p), p===name));
@@ -310,7 +299,7 @@ function listenRoomInvites(){
   if (unsubRoomInvites) unsubRoomInvites();
   const uid = auth.currentUser.uid;
 
-  // Simple equality query so no composite index is required
+  // simple equality query; filter/sort client-side
   const q = db.collection('roomInvites').where('toUid','==', uid);
 
   unsubRoomInvites = q.onSnapshot((qs)=>{
@@ -319,7 +308,8 @@ function listenRoomInvites(){
     const docs = qs.docs
       .map(d => ({ id:d.id, ...d.data() }))
       .filter(d => (d.status || 'pending') === 'pending')
-      .sort((a,b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+      .sort((a,b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
+      .reverse();
 
     if (!docs.length){ $('invitesList').textContent='—'; return; }
 
@@ -409,7 +399,7 @@ async function onLeaveRoom(){
   setPage('groups');
 }
 
-/* ---------- Callables (IDs) ---------- */
+/* ---------- IDs / callables ---------- */
 async function allocateUserIdIfNeeded(){
   const uid = auth.currentUser?.uid;
   if (!uid) return;
